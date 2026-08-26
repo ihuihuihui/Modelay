@@ -3,7 +3,7 @@ set -eu
 
 project_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 app_path="$project_dir/src-tauri/target/release/bundle/macos/Modelay.app"
-output_dir="$project_dir/dist/installers"
+output_dir="$project_dir/artifacts/installers"
 case "$(uname -m)" in
   arm64) architecture=arm64 ;;
   x86_64) architecture=x64 ;;

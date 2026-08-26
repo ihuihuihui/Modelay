@@ -85,7 +85,7 @@ Rust 单元测试覆盖 TOML 保留、原子覆盖、精确文件快照、Provid
 
 当前自动验证基线为 Rust 23 项单元测试和 TypeScript 9 项悬浮窗/额度标签/模型选择测试全部通过；Rust Clippy 全目标零警告、TypeScript 类型检查、Vite 生产构建、npm 生产依赖高危漏洞检查及 `x86_64-pc-windows-msvc` 交叉检查通过。Windows 交叉检查验证 Rust/Win32 源码，最终 NSIS/MSI 的资源编译、链接和运行仍由 Windows runner 或实机验收。
 
-`tauri.windows.conf.json` 将 Windows 默认 bundle 设为 NSIS 与 MSI。`scripts/package-windows.ps1` 负责复制安装器并生成 SHA-256 文件；macOS 脚本会自动识别 arm64/x64、执行 ad-hoc 签名、严格签名验证、DMG 验证并生成 SHA-256 文件。常规 CI 构建两平台安装包；版本标签发布工作流会校验标签与 `package.json` 版本完全一致，再创建 GitHub Release。Updater 插件依赖保留但运行时未注册，避免在没有端点、公钥和安全保存私钥时启动不完整更新链路。
+`tauri.windows.conf.json` 将 Windows 默认 bundle 设为 NSIS 与 MSI。`scripts/package-windows.ps1` 负责复制安装器并生成 SHA-256 文件；macOS 脚本会自动识别 arm64/x64、执行 ad-hoc 签名、严格签名验证、DMG 验证并生成 SHA-256 文件。两平台安装包统一写入顶层 `artifacts/installers`，不再放进会被 Vite 清空的 `dist` 目录。常规 CI 构建两平台安装包；版本标签发布工作流会校验标签与 `package.json` 版本完全一致，再创建 GitHub Release。Updater 插件依赖保留但运行时未注册，避免在没有端点、公钥和安全保存私钥时启动不完整更新链路。
 
 `scripts/check-version.mjs` 会校验 `package.json`、`tauri.conf.json` 和 `Cargo.toml` 的版本完全一致；本地 `npm run verify`、常规 CI、打包任务及标签发布门禁都会执行该检查，防止生成名称与内部版本不一致的安装器。
 
@@ -95,7 +95,7 @@ Rust 单元测试覆盖 TOML 保留、原子覆盖、精确文件快照、Provid
 
 | 文件 | SHA-256 |
 | --- | --- |
-| `Modelay-macOS-arm64.zip` | `1e45c00285b2e42324162e402cb7cf59de768b2f1d41caeb0f128455087666a3` |
-| `Modelay-macOS-arm64.dmg` | `065132516c32e576b71002ab2a6525a193f5f19f8091fee44efc7b81a9237f93` |
+| `Modelay-macOS-arm64.zip` | `41f915dc119df299615a751c7892ad1adc1e62002df53e8e3d8d2e28b045950c` |
+| `Modelay-macOS-arm64.dmg` | `3723634076c0b0b765d3bcc1833242a4d5ab59bcbffa77cdfd078781921aa4d5` |
 
 免费开发阶段不启用空配置 Updater，也不包含正式 Apple/Windows 代码签名。macOS 测试包会执行 ad-hoc 深度签名并严格校验，DMG 通过 `hdiutil verify`。稳定后可生成 Tauri 更新签名密钥，通过 GitHub Releases 或静态更新清单发布；私钥不能提交到仓库。

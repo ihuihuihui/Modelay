@@ -5,7 +5,7 @@ param(
 $ErrorActionPreference = "Stop"
 $projectDir = Split-Path -Parent $PSScriptRoot
 $bundleDir = Join-Path $projectDir "src-tauri\target\release\bundle"
-$outputDir = Join-Path $projectDir "dist\installers"
+$outputDir = Join-Path $projectDir "artifacts\installers"
 
 Set-Location $projectDir
 if (-not $SkipBuild) {

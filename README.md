@@ -36,16 +36,16 @@ macOS 免费测试包：
 npm run package:macos
 ```
 
-输出位于 `dist/installers/Modelay-macOS-arm64.zip` 和 `Modelay-macOS-arm64.dmg`。脚本会在打包后执行 ad-hoc 深度签名和严格校验，适合本机和内部测试。请把该脚本作为最后一个构建步骤，因为普通 Vite 构建会重建 `dist` 目录。
+输出位于 `artifacts/installers/Modelay-macOS-arm64.zip` 和 `Modelay-macOS-arm64.dmg`。脚本会在打包后执行 ad-hoc 深度签名和严格校验，适合本机和内部测试。安装包与 Vite 的 `dist` 前端目录完全分离，因此后续执行 `npm run build` 或 `npm run verify` 不会再删除安装包。
 
 当前免费测试包：
 
 | 文件 | 大小 | SHA-256 |
 | --- | ---: | --- |
-| `Modelay-macOS-arm64.zip` | 8.4 MB | `1e45c00285b2e42324162e402cb7cf59de768b2f1d41caeb0f128455087666a3` |
-| `Modelay-macOS-arm64.dmg` | 9.1 MB | `065132516c32e576b71002ab2a6525a193f5f19f8091fee44efc7b81a9237f93` |
+| `Modelay-macOS-arm64.zip` | 8.4 MB | `41f915dc119df299615a751c7892ad1adc1e62002df53e8e3d8d2e28b045950c` |
+| `Modelay-macOS-arm64.dmg` | 9.1 MB | `3723634076c0b0b765d3bcc1833242a4d5ab59bcbffa77cdfd078781921aa4d5` |
 
-同目录的 `Modelay-macOS-arm64-SHA256.txt` 可用于分发后校验下载完整性。
+同目录的 `Modelay-macOS-arm64-SHA256.txt` 可用于分发后校验下载完整性。安装产物保存在顶层 `artifacts`，不会被 Vite 生产构建清除。
 
 Windows 本机打包：
 
@@ -54,7 +54,7 @@ npm ci
 npm run package:windows
 ```
 
-Windows 默认读取 `src-tauri/tauri.windows.conf.json` 并生成 NSIS `.exe` 与 MSI；产物及 `Modelay-Windows-SHA256.txt` 位于 `dist/installers`。也可以由 `.github/workflows/build.yml` 在 Windows runner 构建；未签名包可能触发 SmartScreen 提示。
+Windows 默认读取 `src-tauri/tauri.windows.conf.json` 并生成 NSIS `.exe` 与 MSI；产物及 `Modelay-Windows-SHA256.txt` 位于 `artifacts/installers`。也可以由 `.github/workflows/build.yml` 在 Windows runner 构建；未签名包可能触发 SmartScreen 提示。
 Rust/Win32 代码已使用 `cargo-xwin` 和 Windows CRT/SDK 完成交叉编译检查，最终安装器链接与运行行为仍需 Windows CI 和实机验收。
 
 ## 免费发布准备
