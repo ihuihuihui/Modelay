@@ -1,0 +1,11 @@
+node_modules
+dist
+src-tauri/target
+.DS_Store
+src-tauri/gen
+.env
+legacy/macos-3/.build
+legacy/macos-3/work
+legacy/macos-3/output
+legacy/macos-3/outputs
+.DS_Store
