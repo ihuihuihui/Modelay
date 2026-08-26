@@ -12,6 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - run: npm run check:version
       - name: Match tag to package version
         shell: bash
         run: |

@@ -6,9 +6,10 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "check:version": "node scripts/check-version.mjs",
     "test": "npm run test:widget && cargo test --manifest-path src-tauri/Cargo.toml",
     "test:widget": "node --experimental-strip-types --test tests/*.test.mjs",
-    "verify": "npm run build && npm run test:widget && cargo test --manifest-path src-tauri/Cargo.toml && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings",
+    "verify": "npm run check:version && npm run build && npm run test:widget && cargo test --manifest-path src-tauri/Cargo.toml && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings",
     "package:macos": "./scripts/package-macos.sh",
     "package:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-windows.ps1",
     "tauri": "tauri"

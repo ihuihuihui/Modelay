@@ -19,6 +19,7 @@ jobs:
       - name: Install Linux dependencies
         run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
       - run: npm ci
+      - run: npm run check:version
       - run: npm run build
       - run: npm run test:widget
       - run: cargo test --manifest-path src-tauri/Cargo.toml
@@ -44,6 +45,7 @@ jobs:
           cache: npm
       - uses: dtolnay/rust-toolchain@stable
       - run: npm ci
+      - run: npm run check:version
       - name: Build macOS ZIP and DMG
         if: runner.os == 'macOS'
         run: ./scripts/package-macos.sh

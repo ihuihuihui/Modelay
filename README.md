@@ -24,6 +24,7 @@ Modelay 是面向 Codex/ChatGPT 桌面端的跨平台渠道与额度管理器，
 
 ```bash
 npm ci
+npm run check:version
 npm run build
 npm test
 npm run tauri dev

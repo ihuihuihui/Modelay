@@ -87,6 +87,8 @@ Rust 单元测试覆盖 TOML 保留、原子覆盖、精确文件快照、Provid
 
 `tauri.windows.conf.json` 将 Windows 默认 bundle 设为 NSIS 与 MSI。`scripts/package-windows.ps1` 负责复制安装器并生成 SHA-256 文件；macOS 脚本会自动识别 arm64/x64、执行 ad-hoc 签名、严格签名验证、DMG 验证并生成 SHA-256 文件。常规 CI 构建两平台安装包；版本标签发布工作流会校验标签与 `package.json` 版本完全一致，再创建 GitHub Release。Updater 插件依赖保留但运行时未注册，避免在没有端点、公钥和安全保存私钥时启动不完整更新链路。
 
+`scripts/check-version.mjs` 会校验 `package.json`、`tauri.conf.json` 和 `Cargo.toml` 的版本完全一致；本地 `npm run verify`、常规 CI、打包任务及标签发布门禁都会执行该检查，防止生成名称与内部版本不一致的安装器。
+
 当前 macOS 构建已通过 `.app` ad-hoc 深度签名严格校验和 DMG 完整性校验。只读 UI 冒烟已验证真实 AiLink 状态、服务端动态模型、实时钱包余额、帮助/设置弹窗、可编辑且不回显旧值的密钥输入框、主窗口关闭后的独立胶囊、点击胶囊不唤起主界面、“靠边隐藏”自动收起、关闭主窗口转入后台、再次启动唤回以及进程数保持单实例；验收完成后悬浮偏好已恢复为“自由悬浮”。该冒烟过程未调用渠道切换、任务覆盖或 ChatGPT 重启。
 
 当前 macOS 免费测试包校验值：
