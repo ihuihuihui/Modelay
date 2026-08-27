@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Modelay",
-  "version": "4.0.0-beta.2",
+  "version": "4.0.0-beta.3",
   "identifier": "app.modelay.desktop",
   "build": { "beforeDevCommand": "npm run dev", "devUrl": "http://localhost:1420", "beforeBuildCommand": "npm run build", "frontendDist": "../dist" },
   "app": {
@@ -12,8 +12,8 @@
         "label": "usage",
         "title": "Modelay 额度",
         "url": "index.html?window=usage",
-      "width": 122,
-      "height": 32,
+      "width": 140,
+      "height": 36,
         "visible": false,
         "resizable": false,
         "decorations": false,

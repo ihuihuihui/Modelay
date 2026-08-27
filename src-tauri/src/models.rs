@@ -183,7 +183,7 @@ pub struct SwitchRequest {
 }
 
 fn default_session_scope() -> String {
-    "recent5".into()
+    "all".into()
 }
 
 #[derive(Clone, Debug, Serialize)]

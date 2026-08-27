@@ -161,7 +161,7 @@ export default function UsageWidget() {
 function Metric({ label, value, reset, onTooltip }: { label: string; value: string; reset?: number; onTooltip: (value: string | null) => void }) {
   const resetText = reset ? new Date(reset * 1000).toLocaleString("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : "未知";
   const title = `${label}额度重置时间：${resetText}`;
-  return <span className="widget-metric" title={title} aria-label={title} onPointerEnter={() => onTooltip(`${label}重置 · ${resetText}`)} onPointerLeave={() => onTooltip(null)}><small>{label}</small><b>{value}</b></span>;
+  return <span className="widget-metric" title={title} aria-label={title} tabIndex={0} onMouseEnter={() => onTooltip(`${label}重置 · ${resetText}`)} onMouseLeave={() => onTooltip(null)} onFocus={() => onTooltip(`${label}重置 · ${resetText}`)} onBlur={() => onTooltip(null)}><small>{label}</small><b>{value}</b></span>;
 }
 
 function percent(value?: UsageWindow) { return value ? `${Math.round(value.remainingPercent)}%` : "—"; }

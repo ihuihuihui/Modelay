@@ -89,7 +89,7 @@ jobs:
         with:
           tagName: v__VERSION__
           releaseName: "Modelay v__VERSION__"
-          releaseBody: "Modelay 4.0 Beta 2 fixes task handoff locking by injecting the prepared summary without starting a background model turn, makes ChatGPT restart non-blocking, adds a visible channel-switch progress state, prevents quota-capsule clicks from opening the main window, shortens and slightly raises the capsule, and introduces a refined dark-spark Modelay icon. Existing channels and old tasks remain unchanged during upgrades."
+          releaseBody: "这次把几个让人皱眉的小问题一起收拾了：跨渠道切换会自动接管全部用户会话，不再留下找不到 openai_http 的旧任务；续接任务会先写入交接内容再立刻停下空转，不占着会话不松手；额度胶囊更醒目，鼠标悬停即可查看准确重置时间。已有渠道、密钥和旧任务内容都不会被删除。"
           releaseDraft: false
           prerelease: false
           uploadUpdaterJson: true

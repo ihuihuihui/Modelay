@@ -263,7 +263,7 @@ pub fn restart_chatgpt(environment: &[(String, Option<String>)]) -> Result<()> {
     let executable = candidates
         .iter()
         .find(|path| path.is_file())
-    .ok_or_else(|| ModelayError::Message("找不到 ChatGPT 应用程序。".into()))?;
+        .ok_or_else(|| ModelayError::Message("找不到 ChatGPT 应用程序。".into()))?;
     let mut command = Command::new(executable);
     clear_provider_environment(&mut command);
     for (key, value) in environment {

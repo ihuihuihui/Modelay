@@ -59,6 +59,8 @@ supports_websockets = false
 
 只匹配 `openai*`、`custom` 和 `custom_*`。当前数据库要求 `thread_source='user'`，并排除空预览、`codex-auto-review` 和 subagent。旧数据库缺少 `thread_source` 时使用可见任务规则；旧表缺少 `reasoning_effort` 时仍完成 Provider 与模型覆盖。Ollama 等其他 Provider、rollout 和消息历史不修改。
 
+跨渠道切换时界面强制使用全部用户任务范围，确保旧任务不会继续引用当前配置中不存在的 `openai_http` 或旧自定义 Provider；最近 5 个与指定会话范围只在重新应用当前渠道时开放。数据库更新只是索引字段事务，不会把未打开任务的上下文载入模型，也不会拖慢后续会话响应。
+
 ## 模型、额度与胶囊
 
 - 官方模型：Codex app-server `model/list`。
@@ -81,7 +83,7 @@ Codex 子进程的 stdout/stderr 会在独立线程持续读取，避免输出�
 
 用户输入会话 ID 后，Modelay 从 Codex 任务索引读取累计 tokens、工作目录、模型、更新时间和 rollout 路径，并只解析该任务最后活动日的用户与助手消息。100 万 tokens 进入警告级别，500 万 tokens 进入严重级别；单日 rollout 超过 20 MB 或消息数量过多也会给出具体风险提示。
 
-创建续接任务时，Modelay 提取最后活动日的用户需求、助手进度以及消息中引用的绝对路径，生成长度受限的结构化交接 Prompt，再调用 Codex app-server 的 `thread/start` 和 `thread/inject_items`。交接内容直接写入新任务历史，不启动模型轮次，因此 Modelay 会立即释放 app-server 进程，不会让新任务长期显示“已在另一个应用中打开”。新任务不复制旧任务的完整消息历史、rollout 或数据库记录；旧任务不会被修改、删除或覆盖。任务索引兼容存在或缺少 `thread_source`、`updated_at_ms` 的数据库结构。
+创建续接任务时，Modelay 提取最后活动日的用户需求、助手进度以及消息中引用的绝对路径，生成长度受限的结构化交接 Prompt，再调用 Codex app-server 的 `thread/start` 和 `turn/start`。Codex 接受并持久化用户交接消息后，Modelay 立即调用 `turn/interrupt` 停止空转并关闭自己的 app-server，既保证新任务有真实可见的首条内容，也不会长期占用会话。新任务不复制旧任务的完整消息历史、rollout 或数据库记录；旧任务不会被修改、删除或覆盖。任务索引兼容存在或缺少 `thread_source`、`updated_at_ms` 的数据库结构。
 
 边缘计算被拆为纯函数测试，覆盖自由位置、左/右/上/下四边、10pt 留边、Retina 物理像素缩放和越界钳制。应用在“靠边隐藏”模式启动时会重新计算当前位置并恢复隐藏状态。
 
@@ -97,13 +99,15 @@ Windows 使用 Credential Manager、`HKCU\\Environment` 和 `WM_SETTINGCHANGE` �
 
 Rust 单元测试覆盖 TOML 保留、原子覆盖、精确文件快照、Provider/URL、全新安装仅官方渠道、已有 AiLink 渠道升级保留、Doctor、官方/第三方额度、Codex 多额度桶优先级、Provider 动态识别、数据库锁回滚，以及当前/旧版 SQLite 表结构。TypeScript 测试覆盖悬浮窗边缘几何、动态额度周期标签、模型选择和更新错误/进度状态。GitHub Actions 在 Linux 运行这些测试，并在 macOS、Windows 生成应用包；Windows Rust/Win32 源码也使用 `cargo-xwin` 与 Windows CRT/SDK 完成交叉编译检查。
 
-当前自动验证基线为 Rust 36 项单元测试和 TypeScript 14 项悬浮窗/额度标签/模型选择/更新状态测试全部通过；新增 Doctor 大型 pretty JSON、稳定 Keychain service、共享额度缓存、推理强度能力校验、任务强度覆盖和无后台轮次的会话交接回归用例。Rust Clippy 全目标零警告、TypeScript 类型检查与 Vite 生产构建通过。Windows runner 负责完整 Windows 编译和 NSIS 安装器生成；运行行为仍需 Windows 实机验收。
+当前自动验证基线为 Rust 36 项单元测试和 TypeScript 16 项悬浮窗、额度标签、模型选择、跨渠道范围和更新状态测试全部通过；新增 Doctor 大型 pretty JSON、稳定 Keychain service、共享额度缓存、推理强度能力校验、任务强度覆盖和会话交接回归用例。Rust Clippy 全目标零警告、TypeScript 类型检查与 Vite 生产构建通过。Windows runner 负责完整 Windows 编译和 NSIS 安装器生成；运行行为仍需 Windows 实机验收。
 
 `tauri.windows.conf.json` 将 Windows 默认 bundle 设为 NSIS 与 MSI。`scripts/package-windows.ps1` 负责复制安装器并生成 SHA-256 文件；macOS 脚本会自动识别 arm64/x64，优先使用 CI 注入的固定开发签名身份（本地未注入时回退 ad-hoc），然后执行严格签名验证、DMG 验证并生成 SHA-256 文件。两平台安装包统一写入顶层 `artifacts/installers`，不再放进会被 Vite 清空的 `dist` 目录。常规 CI 构建两平台安装包；版本标签发布工作流会校验标签与 `package.json` 版本完全一致，再由官方 Tauri Action 创建 GitHub Release、签名更新包和 `latest.json`。
 
 Windows bundle 目标由 `scripts/windows-bundles.mjs` 根据版本选择：正式版本和纯数字预发布版本生成 NSIS 与 MSI；包含 `alpha`、`beta` 等文字预发布标识时仅生成 NSIS，因为 WiX/MSI 的 ProductVersion 不接受非数字预发布字段。NSIS 是 Windows 自动更新首选产物，不影响应用内升级；正式版本仍会恢复 MSI。
 
 Updater 已在 Rust 运行时注册，并通过最小权限开放检查、下载和安装命令。主窗口启动 4 秒后自动检查一次，设置页也可手动检查；发现新版本后显示版本号、发行说明和下载进度，安装结束后调用进程插件重启。下载内容必须通过嵌入公钥验证，签名错误会明确拒绝安装。常规本地构建继续关闭 `createUpdaterArtifacts`；只有发布配置 `tauri.release.generated.json` 临时开启它并注入 HTTPS 更新端点，避免开发包意外连接不存在的发布源。
+
+所有公开 Release 与应用内更新说明使用中文撰写，在不牺牲准确性的前提下保持轻松、易读；发布工作流中的 `releaseBody` 不再使用英文模板。
 
 更新签名私钥为加密文件，保存在 `/Users/Admin/Library/Application Support/Modelay Development/updater/modelay-updater.key`，权限为 `0600`；密码保存在 macOS Keychain 的 `app.modelay.desktop updater signing` 项。仓库只包含公钥。GitHub Actions 使用 `TAURI_SIGNING_PRIVATE_KEY` 与 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` 两项 Secret，更新端点在构建时根据 `${{ github.repository }}` 生成。该更新签名独立于 Apple Developer ID 和 Windows Authenticode 代码签名。
 

@@ -7,6 +7,7 @@ import { Activity, AlertTriangle, ArrowRight, Check, ChevronRight, CircleHelp, C
 import { resolveManualModelFallback } from "./modelSelection";
 import { classifyUpdaterError, downloadPercent, type UpdatePhase } from "./updateState";
 import { quotaLabel } from "./usageFormatting";
+import { resolveSessionScope, type SessionScope } from "./sessionScope";
 
 type Channel = {
   id: string; name: string; baseUrl: string; model: string; reasoningEffort: string; modelsPath: string;
@@ -20,7 +21,6 @@ type AppState = {
 };
 type ModelInfo = { id: string; displayName: string; description: string; isDefault: boolean; supportedReasoningEfforts: string[] };
 type CheckResult = { title: string; detail: string; state: "passed" | "warning" | "failed" };
-type SessionScope = "recent5" | "all" | "single";
 type SwitchReport = { channelId: string; providerId: string; model: string; reasoningEffort: string; sessionScope: SessionScope; imageSkill: string; backupPath: string; needsRestart: boolean; checks: CheckResult[] };
 type UsageWindow = { remainingPercent: number; durationMinutes?: number; resetsAt?: number };
 type UsageSnapshot = { kind: "official" | "channel"; channelId: string; planName?: string; fiveHour?: UsageWindow; weekly?: UsageWindow; remainingBalance?: number; balanceLabel?: string; creditsBalance?: string; updatedAt: number };
@@ -39,7 +39,7 @@ function App() {
   const [selectedId, setSelectedId] = useState("official");
   const [selectedModel, setSelectedModel] = useState("");
   const [selectedReasoningEffort, setSelectedReasoningEffort] = useState("medium");
-  const [sessionScope, setSessionScope] = useState<SessionScope>("recent5");
+  const [sessionScope, setSessionScope] = useState<SessionScope>("all");
   const [threadId, setThreadId] = useState("");
   const [handoffThreadId, setHandoffThreadId] = useState("");
   const [threadHealth, setThreadHealth] = useState<ThreadHealth | null>(null);
@@ -190,14 +190,15 @@ function App() {
 
   async function switchChannel() {
     if (!selectedModel || modelError) return;
-    if (sessionScope === "single" && !threadId.trim()) {
+    const effectiveScope = resolveSessionScope(isCurrent, sessionScope);
+    if (effectiveScope === "single" && !threadId.trim()) {
       setError("请输入需要更新的会话 ID。");
       return;
     }
     setSwitchConfirmOpen(false);
     setSwitchInProgress(true); setBusy(true); setError(null); setReport(null); setMessage("渠道切换进行中：正在备份、写入并验证配置…");
     try {
-      const result = await invoke<SwitchReport>("switch_channel", { request: { channelId: selectedId, model: selectedModel, reasoningEffort: selectedReasoningEffort, sessionScope, threadId: sessionScope === "single" ? threadId.trim() : null } });
+      const result = await invoke<SwitchReport>("switch_channel", { request: { channelId: selectedId, model: selectedModel, reasoningEffort: selectedReasoningEffort, sessionScope: effectiveScope, threadId: effectiveScope === "single" ? threadId.trim() : null } });
       setReport(result);
       await loadState(); await refreshUsage();
       setMessage(`渠道配置已完成：${selected.name} / ${selectedModel}，请确认是否立即重启 Codex`);
@@ -317,7 +318,8 @@ function App() {
   }
 
   const isCurrent = activeId === selectedId;
-  const canSwitch = !!state && !!selectedModel && !busy && !modelsLoading && !modelError && (sessionScope !== "single" || !!threadId.trim()) && (selectedId === "official" ? state.officialLoggedIn : !!selected.hasSecret);
+  const effectiveSessionScope = resolveSessionScope(isCurrent, sessionScope);
+  const canSwitch = !!state && !!selectedModel && !busy && !modelsLoading && !modelError && (effectiveSessionScope !== "single" || !!threadId.trim()) && (selectedId === "official" ? state.officialLoggedIn : !!selected.hasSecret);
 
   return <div className="shell">
     <header className="topbar">
@@ -334,7 +336,7 @@ function App() {
           <div className="channel-list">{allChannels.map((channel) => <div className={`channel-card ${channel.id === selectedId ? "selected" : ""}`} key={channel.id} onClick={() => setSelectedId(channel.id)}><div className={`channel-icon ${channel.id === "official" ? "official" : "custom"}`}>{channel.id === "official" ? <Sparkles size={18} /> : <Plus size={18} />}</div><div className="channel-info"><strong>{channel.name}{activeId === channel.id && <small>当前</small>}</strong><span>{channel.id === "official" ? (state?.officialLoggedIn ? "ChatGPT 官方账号已登录" : "需要登录 ChatGPT 官方账号") : `${channel.baseUrl} · ${channel.hasSecret ? "密钥已保存" : "缺少密钥"}`}</span></div><div className="channel-right">{channel.id === selectedId && <button className="activate-channel-btn" disabled={!canSwitch} onClick={(event) => { event.stopPropagation(); setSwitchConfirmOpen(true); }}><Wifi size={13} />{isCurrent ? "重新应用" : "启用"}</button>}{channel.id !== "official" && <button className="mini-btn" title="编辑" aria-label={`编辑 ${channel.name}`} onClick={(event) => { event.stopPropagation(); editChannel(channel); }}><Pencil size={13} /></button>}{!channel.isBuiltIn && channel.id !== "official" && <button className="mini-btn danger" title="删除" aria-label={`删除 ${channel.name}`} onClick={(event) => { event.stopPropagation(); setPendingDelete(channel); }}><Trash2 size={13} /></button>}{channel.id !== selectedId && <ChevronRight size={16} className="muted" />}</div></div>)}</div>
           <div className="model-picker"><div><strong>目标模型</strong><span>{modelsLoading ? "正在读取服务端模型…" : modelError ?? modelNotice ?? `${models.length} 个可用模型`}</span></div><select value={selectedModel} onChange={(event) => setSelectedModel(event.target.value)} disabled={modelsLoading || !!modelError}>{models.map((model) => <option value={model.id} key={model.id}>{model.displayName || model.id}{model.isDefault ? "（默认）" : ""}</option>)}{!models.length && selectedModel && <option value={selectedModel}>{selectedModel}</option>}</select><button className="icon-btn" title="刷新模型" onClick={() => void loadModels(selectedId, selectedModel, selectedId === "official" || selected.validatesModelList)}><RefreshCw size={15} className={modelsLoading ? "spin" : ""} /></button></div>
           <div className="reasoning-picker"><div><strong>推理强度</strong><span>平衡模式能明显缩短多数任务的等待时间</span></div><select value={selectedReasoningEffort} onChange={(event) => setSelectedReasoningEffort(event.target.value)}>{availableReasoningEfforts.map((effort) => <option value={effort} key={effort}>{reasoningLabels[effort] ?? effort}</option>)}</select>{["high", "xhigh", "max"].includes(selectedReasoningEffort) && <small><AlertTriangle size={12} />深度推理耗时更长，长任务也更容易经历断线重试</small>}</div>
-          <div className="task-scope-picker"><div><strong>更新旧任务范围</strong><span>不活跃任务不会拖慢当前任务，按实际需要选择</span></div><div className="scope-options">{(["recent5", "all", "single"] as SessionScope[]).map((scope) => <button className={sessionScope === scope ? "active" : ""} aria-pressed={sessionScope === scope} key={scope} onClick={() => setSessionScope(scope)}>{sessionScopeLabels[scope]}</button>)}</div>{sessionScope === "single" && <label><span>会话 ID</span><input value={threadId} onChange={(event) => setThreadId(event.target.value)} placeholder="例如 01a0347b-beff-7c60-ae6b-d6cdf766e863" spellCheck={false} /></label>}</div>
+          <div className="task-scope-picker"><div><strong>更新旧任务范围</strong><span>{isCurrent ? "重新应用当前渠道时可精细选择" : "跨渠道切换固定覆盖全部用户任务，避免旧 Provider 无法加载"}</span></div><div className="scope-options">{(["recent5", "all", "single"] as SessionScope[]).map((scope) => <button className={effectiveSessionScope === scope ? "active" : ""} aria-pressed={effectiveSessionScope === scope} disabled={!isCurrent} key={scope} onClick={() => setSessionScope(scope)}>{sessionScopeLabels[scope]}</button>)}</div>{isCurrent && sessionScope === "single" && <label><span>会话 ID</span><input value={threadId} onChange={(event) => setThreadId(event.target.value)} placeholder="例如 01a0347b-beff-7c60-ae6b-d6cdf766e863" spellCheck={false} /></label>}{!isCurrent && <small className="compatibility-note"><ShieldCheck size={12} />所有可互通用户会话都会同步到目标 Provider、模型和推理强度</small>}</div>
         </section>
 
         <section className="side-stack">
@@ -366,7 +368,7 @@ function App() {
 
     {confirmSecretDelete && draft && <div className="modal-backdrop nested-modal"><div className="modal confirm-modal"><div className="restart-icon danger-icon"><KeyRound size={21} /></div><h2>删除 {draft.name} 的密钥？</h2><p>删除后该渠道将无法查询模型、余额或执行切换，直到重新保存密钥。</p><div className="modal-actions"><button className="ghost-btn" onClick={() => setConfirmSecretDelete(false)}>取消</button><button className="danger-btn" onClick={() => void deleteSecret()} disabled={busy}>确认删除密钥</button></div></div></div>}
 
-    {switchConfirmOpen && <div className="modal-backdrop"><div className="modal switch-confirm-modal"><div className="restart-icon"><Wifi size={21} /></div><h2>{isCurrent ? `重新应用 ${selected.name}？` : `启用 ${selected.name}？`}</h2><p>确认后将切换全局 Codex 配置，并更新所选范围内的旧任务。</p><div className="switch-summary"><div><span>目标模型</span><strong>{selectedModel}</strong></div><div><span>推理强度</span><strong>{reasoningLabels[selectedReasoningEffort] ?? selectedReasoningEffort}</strong></div><div><span>旧任务范围</span><strong>{sessionScope === "single" ? threadId.trim() : sessionScopeLabels[sessionScope]}</strong></div></div><div className="modal-actions"><button className="ghost-btn" onClick={() => setSwitchConfirmOpen(false)}>取消</button><button className="primary-btn" onClick={() => void switchChannel()} disabled={!canSwitch}>{busy ? <RefreshCw size={15} className="spin" /> : <Wifi size={15} />}确认启用</button></div></div></div>}
+    {switchConfirmOpen && <div className="modal-backdrop"><div className="modal switch-confirm-modal"><div className="restart-icon"><Wifi size={21} /></div><h2>{isCurrent ? `重新应用 ${selected.name}？` : `启用 ${selected.name}？`}</h2><p>确认后将切换全局 Codex 配置，并更新所选范围内的旧任务。</p><div className="switch-summary"><div><span>目标模型</span><strong>{selectedModel}</strong></div><div><span>推理强度</span><strong>{reasoningLabels[selectedReasoningEffort] ?? selectedReasoningEffort}</strong></div><div><span>旧任务范围</span><strong>{effectiveSessionScope === "single" ? threadId.trim() : sessionScopeLabels[effectiveSessionScope]}</strong></div></div><div className="modal-actions"><button className="ghost-btn" onClick={() => setSwitchConfirmOpen(false)}>取消</button><button className="primary-btn" onClick={() => void switchChannel()} disabled={!canSwitch}>{busy ? <RefreshCw size={15} className="spin" /> : <Wifi size={15} />}确认启用</button></div></div></div>}
 
     {switchInProgress && <div className="modal-backdrop operation-backdrop"><div className="modal operation-modal" role="status" aria-live="polite"><div className="operation-spinner"><RefreshCw size={24} className="spin" /></div><h2>正在切换到 {selected.name}</h2><p>Modelay 正在依次备份配置、验证模型与服务、更新任务索引。完成前渠道尚未完全生效，请不要关闭软件。</p><div className="operation-steps"><span><Check size={13} />已确认目标渠道与模型</span><span><RefreshCw size={13} className="spin" />正在写入、验证并生成回滚备份</span><span>完成后将立即显示“重启 Codex”确认</span></div></div></div>}
 

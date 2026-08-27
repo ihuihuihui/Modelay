@@ -36,6 +36,7 @@ fn create_thread_handoff_inner(request: HandoffRequest) -> Result<HandoffReport>
     let config_document = config::read()?;
     let provider = config::active_provider(&config_document.document);
     let model = config::active_model(&config_document.document);
+    let effort = config::active_reasoning_effort(&config_document.document);
     if model.trim().is_empty() {
         return Err("当前 Codex 配置没有可用模型。".into());
     }
@@ -70,6 +71,7 @@ fn create_thread_handoff_inner(request: HandoffRequest) -> Result<HandoffReport>
         &record.cwd,
         &provider,
         &model,
+        &effort,
         &environment_refs,
     )?;
     Ok(HandoffReport {
@@ -523,13 +525,27 @@ fn switch_inner(request: SwitchRequest) -> Result<SwitchReport> {
             "不支持的推理强度 {reasoning_effort}。"
         )));
     }
-    let session_scope = parse_session_scope(&request.session_scope, request.thread_id.as_deref())?;
-    let session_scope_label = session_scope.label();
     let channel = if is_official {
         None
     } else {
         Some(find_channel(&preferences, &request.channel_id)?.clone())
     };
+    let current_provider = config::active_provider(&config::read()?.document);
+    let target_provider = if is_official {
+        sessions::detect_official_provider()
+    } else {
+        channel
+            .as_ref()
+            .expect("non-official channel was resolved")
+            .provider_id()
+    };
+    let session_scope = resolve_session_scope(
+        &current_provider,
+        &target_provider,
+        &request.session_scope,
+        request.thread_id.as_deref(),
+    )?;
+    let session_scope_label = session_scope.label();
     let secret = match &channel {
         Some(channel) => Some(secrets::get(channel)?.ok_or_else(|| {
             ModelayError::Message(format!("尚未保存 {} 的 API 密钥。", channel.name))
@@ -582,7 +598,7 @@ fn switch_inner(request: SwitchRequest) -> Result<SwitchReport> {
     let result = (|| -> Result<SwitchReport> {
         let provider_id = if is_official {
             config::activate_official(&mut config_document.document, model, reasoning_effort);
-            sessions::detect_official_provider()
+            target_provider.clone()
         } else {
             let mut selected = channel.clone().unwrap();
             selected.model = model.into();
@@ -700,7 +716,12 @@ fn switch_inner(request: SwitchRequest) -> Result<SwitchReport> {
             provider_id,
             model: model.into(),
             reasoning_effort: reasoning_effort.into(),
-            session_scope: request.session_scope.clone(),
+            session_scope: match session_scope {
+                sessions::RebindScope::Recent(_) => "recent5",
+                sessions::RebindScope::All => "all",
+                sessions::RebindScope::Single(_) => "single",
+            }
+            .into(),
             image_skill: image_skill.into(),
             backup_path: backup_path.display().to_string(),
             needs_restart: true,
@@ -962,6 +983,18 @@ fn parse_session_scope(value: &str, thread_id: Option<&str>) -> Result<sessions:
     }
 }
 
+fn resolve_session_scope(
+    current_provider: &str,
+    target_provider: &str,
+    requested: &str,
+    thread_id: Option<&str>,
+) -> Result<sessions::RebindScope> {
+    if current_provider != target_provider {
+        return Ok(sessions::RebindScope::All);
+    }
+    parse_session_scope(requested, thread_id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1021,6 +1054,18 @@ mod tests {
         );
         assert!(parse_session_scope("single", Some("bad id")).is_err());
         assert!(parse_session_scope("single", None).is_err());
+    }
+
+    #[test]
+    fn forces_all_tasks_when_switching_providers() {
+        assert_eq!(
+            resolve_session_scope("openai_http", "custom_proxy", "single", None).unwrap(),
+            sessions::RebindScope::All
+        );
+        assert_eq!(
+            resolve_session_scope("custom_proxy", "custom_proxy", "recent5", None).unwrap(),
+            sessions::RebindScope::Recent(5)
+        );
     }
 
     #[test]
