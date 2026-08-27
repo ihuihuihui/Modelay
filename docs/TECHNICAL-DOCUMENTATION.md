@@ -85,7 +85,7 @@ Windows 使用 Credential Manager、`HKCU\\Environment` 和 `WM_SETTINGCHANGE` �
 
 Rust 单元测试覆盖 TOML 保留、原子覆盖、精确文件快照、Provider/URL、全新安装仅官方渠道、已有 AiLink 渠道升级保留、Doctor、官方/第三方额度、Codex 多额度桶优先级、Provider 动态识别、数据库锁回滚，以及当前/旧版 SQLite 表结构。TypeScript 测试覆盖悬浮窗边缘几何、动态额度周期标签、模型选择和更新错误/进度状态。GitHub Actions 在 Linux 运行这些测试，并在 macOS、Windows 生成应用包；Windows Rust/Win32 源码也使用 `cargo-xwin` 与 Windows CRT/SDK 完成交叉编译检查。
 
-当前自动验证基线为 Rust 23 项单元测试和 TypeScript 13 项悬浮窗/额度标签/模型选择/更新状态测试全部通过；Rust Clippy 全目标零警告、TypeScript 类型检查、Vite 生产构建、npm 生产依赖高危漏洞检查及 `x86_64-pc-windows-msvc` 交叉检查通过。Windows 交叉检查验证 Rust/Win32 源码，Windows runner 已成功生成 `v4.0.0-alpha.3` NSIS 安装器；运行行为仍需 Windows 实机验收。
+当前自动验证基线为 Rust 23 项单元测试和 TypeScript 13 项悬浮窗/额度标签/模型选择/更新状态测试全部通过；Rust Clippy 全目标零警告、TypeScript 类型检查、Vite 生产构建、npm 生产依赖高危漏洞检查及 `x86_64-pc-windows-msvc` 交叉检查通过。Windows 交叉检查验证 Rust/Win32 源码，Windows runner 已成功生成 `v4.0.0-alpha.4` NSIS 安装器；运行行为仍需 Windows 实机验收。
 
 `tauri.windows.conf.json` 将 Windows 默认 bundle 设为 NSIS 与 MSI。`scripts/package-windows.ps1` 负责复制安装器并生成 SHA-256 文件；macOS 脚本会自动识别 arm64/x64、执行 ad-hoc 签名、严格签名验证、DMG 验证并生成 SHA-256 文件。两平台安装包统一写入顶层 `artifacts/installers`，不再放进会被 Vite 清空的 `dist` 目录。常规 CI 构建两平台安装包；版本标签发布工作流会校验标签与 `package.json` 版本完全一致，再由官方 Tauri Action 创建 GitHub Release、签名更新包和 `latest.json`。
 
@@ -97,13 +97,13 @@ Updater 已在 Rust 运行时注册，并通过最小权限开放检查、下载
 
 `scripts/check-version.mjs` 会校验 `package.json`、`tauri.conf.json` 和 `Cargo.toml` 的版本完全一致；本地 `npm run verify`、常规 CI、打包任务及标签发布门禁都会执行该检查，防止生成名称与内部版本不一致的安装器。
 
-当前 macOS 构建已通过 `.app` ad-hoc 深度签名严格校验和 DMG 完整性校验。只读 UI 冒烟已验证真实 AiLink 状态、服务端动态模型、实时钱包余额、帮助/设置弹窗、可编辑且不回显旧值的密钥输入框、主窗口关闭后的独立胶囊、点击胶囊不唤起主界面、“靠边隐藏”自动收起、关闭主窗口转入后台、再次启动唤回以及进程数保持单实例；验收完成后悬浮偏好已恢复为“自由悬浮”。该冒烟过程未调用渠道切换、任务覆盖或 ChatGPT 重启。
+当前 macOS 构建已通过 `.app` ad-hoc 深度签名严格校验和 DMG 完整性校验。自动测试验证全新偏好只包含官方渠道，并验证已有 AiLink 渠道升级后仍作为用户渠道保留。此前在既有用户配置上完成的只读 UI 冒烟覆盖服务端动态模型、实时钱包余额、帮助/设置弹窗、可编辑且不回显旧值的密钥输入框、主窗口关闭后的独立胶囊、点击胶囊不唤起主界面、“靠边隐藏”自动收起、关闭主窗口转入后台、再次启动唤回以及进程数保持单实例；该过程未调用渠道切换、任务覆盖或 ChatGPT 重启。
 
-当前发布测试包（`v4.0.0-alpha.3`）校验值：
+当前发布测试包（`v4.0.0-alpha.4`）校验值：
 
 | 文件 | SHA-256 |
 | --- | --- |
-| `Modelay_4.0.0-alpha.3_aarch64.dmg` | `3863c8b3e0b912ca27e11222b5917b35708556afc080781437727b3507218581` |
-| `Modelay_4.0.0-alpha.3_x64-setup.exe` | `5936a329fcbb626666a98743b9fe1dd5534fcc8e4a8c2b9ced2b65ab3fb4d057` |
+| `Modelay_4.0.0-alpha.4_aarch64.dmg` | `5044bcccd11d6567dd0e73e56b0540baf3689250c3cc7da00c373eb2c2b4599e` |
+| `Modelay_4.0.0-alpha.4_x64-setup.exe` | `d1a2739c4bc7de9d19c6a57aae738ef02b3db0b12ab4e430a0fef5a33072d104` |
 
-免费开发阶段已经启用 Tauri 更新包的独立签名验证，但仍不包含正式 Apple/Windows 代码签名。macOS 测试包会执行 ad-hoc 深度签名并严格校验，DMG 通过 `hdiutil verify`。公开仓库 `ihuihuihui/Modelay` 已配置发布所需的 GitHub Actions Secrets，`v4.0.0-alpha.3` 的 macOS/Windows 签名更新包与 `latest.json` 已发布并通过公开下载验证。私钥不得提交到仓库，也不能在已有安装用户后随意更换，否则旧版本将无法验证后续更新。
+免费开发阶段已经启用 Tauri 更新包的独立签名验证，但仍不包含正式 Apple/Windows 代码签名。macOS 测试包会执行 ad-hoc 深度签名并严格校验，DMG 通过 `hdiutil verify`。公开仓库 `ihuihuihui/Modelay` 已配置发布所需的 GitHub Actions Secrets，`v4.0.0-alpha.4` 的 macOS/Windows 签名更新包与 `latest.json` 已发布并通过公开下载验证；清单中的两平台签名与独立 `.sig` 文件完全一致。私钥不得提交到仓库，也不能在已有安装用户后随意更换，否则旧版本将无法验证后续更新。

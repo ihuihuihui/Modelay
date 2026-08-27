@@ -39,14 +39,14 @@ npm run package:macos
 
 输出位于 `artifacts/installers/Modelay-macOS-arm64.zip` 和 `Modelay-macOS-arm64.dmg`。脚本会在打包后执行 ad-hoc 深度签名和严格校验，适合本机和内部测试。安装包与 Vite 的 `dist` 前端目录完全分离，因此后续执行 `npm run build` 或 `npm run verify` 不会再删除安装包。
 
-当前发布测试包（`v4.0.0-alpha.3`）：
+当前发布测试包（`v4.0.0-alpha.4`）：
 
 | 文件 | 大小 | SHA-256 |
 | --- | ---: | --- |
-| `Modelay_4.0.0-alpha.3_aarch64.dmg` | 10.8 MB | `3863c8b3e0b912ca27e11222b5917b35708556afc080781437727b3507218581` |
-| `Modelay_4.0.0-alpha.3_x64-setup.exe` | 5.0 MB | `5936a329fcbb626666a98743b9fe1dd5534fcc8e4a8c2b9ced2b65ab3fb4d057` |
+| `Modelay_4.0.0-alpha.4_aarch64.dmg` | 10.8 MB | `5044bcccd11d6567dd0e73e56b0540baf3689250c3cc7da00c373eb2c2b4599e` |
+| `Modelay_4.0.0-alpha.4_x64-setup.exe` | 5.0 MB | `d1a2739c4bc7de9d19c6a57aae738ef02b3db0b12ab4e430a0fef5a33072d104` |
 
-本机 `artifacts/installers/Modelay_4.0.0-alpha.3_SHA256.txt` 可用于校验两个安装包的下载完整性。安装产物保存在顶层 `artifacts`，不会被 Vite 生产构建清除。
+本机 `artifacts/installers/Modelay_4.0.0-alpha.4_SHA256.txt` 可用于校验两个安装包的下载完整性。安装产物保存在顶层 `artifacts`，不会被 Vite 生产构建清除。
 
 Windows 本机打包：
 
@@ -61,11 +61,11 @@ Rust/Win32 代码已使用 `cargo-xwin` 和 Windows CRT/SDK 完成交叉编译�
 ## 免费发布准备
 
 - `.github/workflows/build.yml` 会测试后同时生成 macOS ZIP/DMG 与 Windows NSIS/MSI，并附 SHA-256 文件。
-- `.github/workflows/release.yml` 在推送与 `package.json` 版本一致的 `v*` 标签时创建 GitHub Release，例如 `v4.0.0-alpha.3`，并发布签名更新产物与 `latest.json`。
+- `.github/workflows/release.yml` 在推送与 `package.json` 版本一致的 `v*` 标签时创建 GitHub Release，例如 `v4.0.0-alpha.4`，并发布签名更新产物与 `latest.json`。
 - 更新公钥已写入应用；加密私钥只保存在本机 `/Users/Admin/Library/Application Support/Modelay Development/updater/modelay-updater.key`，密码保存在 macOS Keychain，不进入仓库。
 - 发布仓库需要公开读取 Release 资产，并在 GitHub Actions Secrets 中配置 `TAURI_SIGNING_PRIVATE_KEY` 与 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`。
-- 当前公开发布仓库为 `ihuihuihui/Modelay`，`v4.0.0-alpha.3` 已完成 macOS 与 Windows 构建并上线公开更新清单。
-- 旧的 `4.0.0-alpha.1` 安装包没有更新器，因此需要手动安装一次 `4.0.0-alpha.3`；从该版本开始才可应用内升级。
+- 当前公开发布仓库为 `ihuihuihui/Modelay`，`v4.0.0-alpha.4` 已完成 macOS 与 Windows 构建并上线公开更新清单。
+- 旧的 `4.0.0-alpha.1` 安装包没有更新器，因此需要手动安装一次当前 `4.0.0-alpha.4`；`alpha.3` 用户可以直接在应用内升级。
 - Windows 的非数字预发布版本生成 NSIS `.exe`；WiX/MSI 要求数字兼容版本，因此 MSI 从正式纯数字版本恢复生成。
 
 ## 当前验证结果
