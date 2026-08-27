@@ -217,6 +217,42 @@ pub struct SwitchReport {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ThreadHealth {
+    pub thread_id: String,
+    pub title: String,
+    pub cwd: String,
+    pub provider_id: String,
+    pub model: String,
+    pub reasoning_effort: String,
+    pub tokens_used: i64,
+    pub today_message_count: usize,
+    pub today_rollout_bytes: u64,
+    pub risk_level: String,
+    pub risk_label: String,
+    pub risk_reasons: Vec<String>,
+    pub latest_user_request: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HandoffRequest {
+    pub thread_id: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HandoffReport {
+    pub source_thread_id: String,
+    pub new_thread_id: String,
+    pub title: String,
+    pub cwd: String,
+    pub message_count: usize,
+    pub referenced_paths: Vec<String>,
+    pub risk_level: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AppState {
     pub platform: String,
     pub current_mode: String,

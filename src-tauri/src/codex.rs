@@ -242,6 +242,10 @@ struct RpcProcess {
 
 impl RpcProcess {
     fn spawn() -> Result<Self> {
+        Self::spawn_with_environment(&[])
+    }
+
+    fn spawn_with_environment(environment: &[(&str, Option<&str>)]) -> Result<Self> {
         let mut command = Command::new(platform::codex_executable()?);
         command
             .args(["app-server", "--stdio"])
@@ -249,6 +253,12 @@ impl RpcProcess {
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
         platform::clear_provider_environment(&mut command);
+        for (key, value) in environment {
+            command.env_remove(key);
+            if let Some(value) = value {
+                command.env(key, value);
+            }
+        }
         let mut child = command.spawn()?;
         let input = child
             .stdin
@@ -265,9 +275,7 @@ impl RpcProcess {
                 .map_while(std::result::Result::ok)
             {
                 if let Ok(value) = serde_json::from_str::<Value>(&line) {
-                    if value.get("id").is_some() {
-                        let _ = sender.send(value);
-                    }
+                    let _ = sender.send(value);
                 }
             }
         });
@@ -307,6 +315,23 @@ impl RpcProcess {
         }
     }
 
+    fn wait_for_method(&mut self, method: &str, timeout: Duration) -> Result<Value> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(ModelayError::Message(format!("等待 Codex {method} 超时。")));
+            }
+            let value = self
+                .receiver
+                .recv_timeout(remaining)
+                .map_err(|_| ModelayError::Message(format!("等待 Codex {method} 超时。")))?;
+            if value.get("method").and_then(Value::as_str) == Some(method) {
+                return Ok(value);
+            }
+        }
+    }
+
     fn request(&mut self, method: &str, params: Value, timeout: Duration) -> Result<Value> {
         let id = self.next_id;
         self.next_id += 1;
@@ -331,6 +356,47 @@ impl RpcProcess {
             let _ = reader.join();
         }
     }
+}
+
+pub fn create_handoff_thread(
+    prompt: String,
+    cwd: &str,
+    provider: &str,
+    model: &str,
+    effort: &str,
+    environment: &[(&str, Option<&str>)],
+) -> Result<String> {
+    let mut process = RpcProcess::spawn_with_environment(environment)?;
+    let started = process.request(
+        "thread/start",
+        json!({
+            "cwd": cwd,
+            "model": model,
+            "modelProvider": provider,
+            "approvalPolicy": "never",
+            "sandbox": "danger-full-access"
+        }),
+        Duration::from_secs(30),
+    )?;
+    let thread_id = started
+        .pointer("/thread/id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| ModelayError::Message("Codex 未返回新任务 ID。".into()))?
+        .to_owned();
+    process.request(
+        "turn/start",
+        json!({
+            "threadId": thread_id,
+            "input": [{"type":"text","text":prompt}],
+            "model": model,
+            "effort": effort
+        }),
+        Duration::from_secs(30),
+    )?;
+    std::thread::spawn(move || {
+        let _ = process.wait_for_method("turn/completed", Duration::from_secs(1800));
+    });
+    Ok(thread_id)
 }
 
 impl Drop for RpcProcess {

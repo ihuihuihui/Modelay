@@ -147,7 +147,7 @@ export default function UsageWidget() {
   }
 
   return <div className={`usage-widget ${error ? "has-error" : ""}`} onPointerDown={() => void beginDrag()} onPointerEnter={() => void reveal()} onPointerLeave={scheduleHide} role="status" aria-live="polite">
-    <span className="widget-logo"><Sparkles size={12} /></span>
+    <span className="widget-logo"><img src="/modelay-logo.png" alt="" /></span>
     {usage?.kind === "official" ? <>
       <Metric label={quotaLabel(usage.fiveHour, "short", true)} value={percent(usage.fiveHour)} reset={usage.fiveHour?.resetsAt} onTooltip={setResetTooltip} />
       <span className="widget-divider" />

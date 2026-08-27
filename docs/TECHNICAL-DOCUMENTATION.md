@@ -2,7 +2,7 @@
 
 ## 架构
 
-Modelay 采用 Tauri 2 桌面壳、React/TypeScript 界面和 Rust 核心。Rust 模块按职责拆分：`config` 管理 TOML，`secrets` 管理系统凭据，`codex` 调用 Codex CLI/app-server，`sessions` 管理 SQLite 任务索引，`usage` 解析额度，`platform` 处理 macOS/Windows 差异，`storage` 管理偏好与原子文件写入，`commands` 对前端提供稳定命令。
+Modelay 采用 Tauri 2 桌面壳、React/TypeScript 界面和 Rust 核心。Rust 模块按职责拆分：`config` 管理 TOML，`secrets` 管理系统凭据，`codex` 调用 Codex CLI/app-server，`sessions` 管理 SQLite 任务索引，`handoff` 检查会话健康并生成精简交接，`usage` 解析额度，`platform` 处理 macOS/Windows 差异，`storage` 管理偏好与原子文件写入，`commands` 对前端提供稳定命令。
 
 ## 数据与安全
 
@@ -77,11 +77,17 @@ Codex 子进程的 stdout/stderr 会在独立线程持续读取，避免输出�
 
 主窗口的关闭按钮只隐藏窗口，应用继续提供额度胶囊。托盘菜单和托盘左键可恢复主窗口；macOS Dock 再次打开事件及第二次启动同一应用也会恢复现有窗口。应用使用 single-instance 插件阻止重复后台实例，额度胶囊自身仍不承担打开主界面的行为。
 
+## 会话健康与自动续接
+
+用户输入会话 ID 后，Modelay 从 Codex 任务索引读取累计 tokens、工作目录、模型、更新时间和 rollout 路径，并只解析该任务最后活动日的用户与助手消息。100 万 tokens 进入警告级别，500 万 tokens 进入严重级别；单日 rollout 超过 20 MB 或消息数量过多也会给出具体风险提示。
+
+创建续接任务时，Modelay 提取最后活动日的用户需求、助手进度以及消息中引用的绝对路径，生成长度受限的结构化交接 Prompt，再通过当前渠道、模型和推理强度调用 Codex app-server 的 `thread/start` 与 `turn/start`。新任务只接收精简摘要，不复制旧任务的完整消息历史、rollout 或数据库记录；旧任务不会被修改、删除或覆盖。任务索引兼容存在或缺少 `thread_source`、`updated_at_ms` 的数据库结构。
+
 边缘计算被拆为纯函数测试，覆盖自由位置、左/右/上/下四边、10pt 留边、Retina 物理像素缩放和越界钳制。应用在“靠边隐藏”模式启动时会重新计算当前位置并恢复隐藏状态。
 
 ## 平台适配
 
-macOS 使用 Keychain、`launchctl setenv`、ChatGPT 应用探测和 `open -a ChatGPT`。`alpha.5` 将渠道密钥写入新的 `app.modelay.desktop.v2` service，不再隐式读取可能绑定旧 ad-hoc 身份的 `app.modelay.desktop` 项。状态读取优先使用渠道的用户会话环境和进程内缓存，再通过 Security Framework 非交互读取新 service；只有用户明确保存或更新密钥时才写入 Keychain，读取状态和切换不会在后台迁移密钥。切换渠道时清除所有非目标环境变量，Codex 子进程仍严格隔离非目标密钥。运行时不启动 `/usr/bin/security`。
+macOS 使用 Keychain、`launchctl setenv`、ChatGPT 应用探测，并直接启动 ChatGPT 可执行文件和传递目标渠道环境变量。`alpha.5` 将渠道密钥写入新的 `app.modelay.desktop.v2` service，不再隐式读取可能绑定旧 ad-hoc 身份的 `app.modelay.desktop` 项。状态读取优先使用渠道的用户会话环境和进程内缓存，再通过 Security Framework 非交互读取新 service；只有用户明确保存或更新密钥时才写入 Keychain，读取状态和切换不会在后台迁移密钥。切换渠道时清除所有非目标环境变量，Codex 子进程仍严格隔离非目标密钥。运行时不启动 `/usr/bin/security`。
 
 公开 macOS 包另外使用固定的自签名开发代码签名证书。不同版本的 designated requirement 均为 `identifier "app.modelay.desktop"` 加同一证书根指纹，不再使用每次构建都会变化的 ad-hoc `cdhash`。证书私钥保存在 `/Users/Admin/Library/Application Support/Modelay Development/code-signing`，密码位于 macOS Keychain；GitHub Actions 只通过加密 Secrets 导入 P12。该签名用于稳定 Keychain 代码身份，仍不属于 Apple Developer ID，也不能替代 Gatekeeper 公证。
 
@@ -91,7 +97,7 @@ Windows 使用 Credential Manager、`HKCU\\Environment` 和 `WM_SETTINGCHANGE` �
 
 Rust 单元测试覆盖 TOML 保留、原子覆盖、精确文件快照、Provider/URL、全新安装仅官方渠道、已有 AiLink 渠道升级保留、Doctor、官方/第三方额度、Codex 多额度桶优先级、Provider 动态识别、数据库锁回滚，以及当前/旧版 SQLite 表结构。TypeScript 测试覆盖悬浮窗边缘几何、动态额度周期标签、模型选择和更新错误/进度状态。GitHub Actions 在 Linux 运行这些测试，并在 macOS、Windows 生成应用包；Windows Rust/Win32 源码也使用 `cargo-xwin` 与 Windows CRT/SDK 完成交叉编译检查。
 
-当前自动验证基线为 Rust 29 项单元测试和 TypeScript 13 项悬浮窗/额度标签/模型选择/更新状态测试全部通过；新增 Doctor 大型 pretty JSON、稳定 Keychain service、共享额度缓存、推理强度能力校验和任务强度覆盖回归用例。Rust Clippy 全目标零警告、TypeScript 类型检查与 Vite 生产构建通过。Windows runner 负责完整 Windows 编译和 NSIS 安装器生成；运行行为仍需 Windows 实机验收。
+当前自动验证基线为 Rust 35 项单元测试和 TypeScript 14 项悬浮窗/额度标签/模型选择/更新状态测试全部通过；新增 Doctor 大型 pretty JSON、稳定 Keychain service、共享额度缓存、推理强度能力校验、任务强度覆盖和会话交接回归用例。Rust Clippy 全目标零警告、TypeScript 类型检查与 Vite 生产构建通过。Windows runner 负责完整 Windows 编译和 NSIS 安装器生成；运行行为仍需 Windows 实机验收。
 
 `tauri.windows.conf.json` 将 Windows 默认 bundle 设为 NSIS 与 MSI。`scripts/package-windows.ps1` 负责复制安装器并生成 SHA-256 文件；macOS 脚本会自动识别 arm64/x64，优先使用 CI 注入的固定开发签名身份（本地未注入时回退 ad-hoc），然后执行严格签名验证、DMG 验证并生成 SHA-256 文件。两平台安装包统一写入顶层 `artifacts/installers`，不再放进会被 Vite 清空的 `dist` 目录。常规 CI 构建两平台安装包；版本标签发布工作流会校验标签与 `package.json` 版本完全一致，再由官方 Tauri Action 创建 GitHub Release、签名更新包和 `latest.json`。
 
@@ -105,11 +111,4 @@ Updater 已在 Rust 运行时注册，并通过最小权限开放检查、下载
 
 当前 macOS 发布构建已通过固定开发身份的 `.app` 深度签名严格校验、designated requirement 检查和 DMG 完整性校验。自动测试验证全新偏好只包含官方渠道，并验证已有 AiLink 渠道升级后仍作为用户渠道保留。此前在既有用户配置上完成的只读 UI 冒烟覆盖服务端动态模型、实时钱包余额、帮助/设置弹窗、可编辑且不回显旧值的密钥输入框、主窗口关闭后的独立胶囊、点击胶囊不唤起主界面、“靠边隐藏”自动收起、关闭主窗口转入后台、再次启动唤回以及进程数保持单实例；该过程未调用渠道切换、任务覆盖或 ChatGPT 重启。
 
-当前发布测试包（`v4.0.0-alpha.6`）校验值：
-
-| 文件 | SHA-256 |
-| --- | --- |
-| `Modelay_4.0.0-alpha.6_aarch64.dmg` | `2a3d2238471539eb8a46a8edc34921910ae4cca983990f059339ce57ac50e9e2` |
-| `Modelay_4.0.0-alpha.6_x64-setup.exe` | `4e65a844fa7f319fb3770931dea79a49538650827965364284010ddeb56932a7` |
-
-免费开发阶段已经启用 Tauri 更新包的独立签名验证，但仍不包含正式 Apple Developer ID/Windows Authenticode 签名。macOS 测试包使用固定自签名开发身份执行深度签名并严格校验，DMG 通过 `hdiutil verify`。公开仓库 `ihuihuihui/Modelay` 已配置发布所需的 GitHub Actions Secrets，`v4.0.0-alpha.6` 的 macOS/Windows 签名更新包与 `latest.json` 已发布并通过公开下载验证；清单中的两平台签名与独立 `.sig` 文件完全一致。私钥不得提交到仓库，也不能在已有安装用户后随意更换，否则旧版本将无法验证后续更新。
+免费开发阶段已经启用 Tauri 更新包的独立签名验证，但仍不包含正式 Apple Developer ID/Windows Authenticode 签名。macOS 测试包使用固定自签名开发身份执行深度签名并严格校验，DMG 通过 `hdiutil verify`。公开仓库 `ihuihuihui/Modelay` 已配置发布所需的 GitHub Actions Secrets；每次标签发布会同时生成 macOS/Windows 签名更新包和 `latest.json`。私钥不得提交到仓库，也不能在已有安装用户后随意更换，否则旧版本将无法验证后续更新。

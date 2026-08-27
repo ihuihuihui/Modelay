@@ -3,7 +3,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type DownloadEvent, type Update } from "@tauri-apps/plugin-updater";
-import { AlertTriangle, Check, ChevronRight, CircleHelp, Copy, Database, Download, FolderOpen, KeyRound, LogIn, Pencil, Plus, RefreshCw, Settings2, ShieldCheck, Sparkles, Trash2, Wifi, X } from "lucide-react";
+import { Activity, AlertTriangle, ArrowRight, Check, ChevronRight, CircleHelp, Copy, Database, Download, FileText, FolderOpen, KeyRound, LogIn, Pencil, Plus, RefreshCw, Settings2, ShieldCheck, Sparkles, Trash2, Wifi, X } from "lucide-react";
 import { resolveManualModelFallback } from "./modelSelection";
 import { classifyUpdaterError, downloadPercent, type UpdatePhase } from "./updateState";
 import { quotaLabel } from "./usageFormatting";
@@ -26,6 +26,8 @@ type UsageWindow = { remainingPercent: number; durationMinutes?: number; resetsA
 type UsageSnapshot = { kind: "official" | "channel"; channelId: string; planName?: string; fiveHour?: UsageWindow; weekly?: UsageWindow; remainingBalance?: number; balanceLabel?: string; creditsBalance?: string; updatedAt: number };
 type Draft = Channel & { secret: string };
 type InfoPanel = "help" | "settings" | null;
+type ThreadHealth = { threadId: string; title: string; cwd: string; providerId: string; model: string; reasoningEffort: string; tokensUsed: number; todayMessageCount: number; todayRolloutBytes: number; riskLevel: "healthy" | "warning" | "critical"; riskLabel: string; riskReasons: string[]; latestUserRequest?: string };
+type HandoffReport = { sourceThreadId: string; newThreadId: string; title: string; cwd: string; messageCount: number; referencedPaths: string[]; riskLevel: string };
 
 const officialChannel: Channel = { id: "official", name: "OpenAI 官方", baseUrl: "ChatGPT 账号登录", model: "", reasoningEffort: "medium", modelsPath: "", usagePath: "", validatesModelList: true, isBuiltIn: true };
 const fallbackReasoningEfforts = ["low", "medium", "high"];
@@ -39,6 +41,10 @@ function App() {
   const [selectedReasoningEffort, setSelectedReasoningEffort] = useState("medium");
   const [sessionScope, setSessionScope] = useState<SessionScope>("recent5");
   const [threadId, setThreadId] = useState("");
+  const [handoffThreadId, setHandoffThreadId] = useState("");
+  const [threadHealth, setThreadHealth] = useState<ThreadHealth | null>(null);
+  const [handoffReport, setHandoffReport] = useState<HandoffReport | null>(null);
+  const [handoffBusy, setHandoffBusy] = useState(false);
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelError, setModelError] = useState<string | null>(null);
@@ -232,8 +238,8 @@ function App() {
   }
 
   async function restartNow() {
-    setRestartOpen(false); setBusy(true); setMessage("正在重启 ChatGPT…");
-    try { await invoke("restart_chatgpt"); setMessage("ChatGPT 已重新打开"); }
+    setRestartOpen(false); setBusy(true); setMessage("正在重启 Codex…");
+    try { await invoke("restart_chatgpt"); setMessage("Codex 已重新打开"); }
     catch (reason) { setError(String(reason)); }
     finally { setBusy(false); }
   }
@@ -279,6 +285,29 @@ function App() {
     } catch (reason) { setError(String(reason)); }
   }
 
+  async function inspectThread() {
+    const value = handoffThreadId.trim();
+    if (!value) { setError("请输入需要检查的会话 ID。"); return; }
+    setHandoffBusy(true); setThreadHealth(null); setHandoffReport(null); setError(null); setMessage("正在读取当天会话记录并分析风险…");
+    try {
+      const result = await invoke<ThreadHealth>("get_thread_health", { threadId: value });
+      setThreadHealth(result);
+      setMessage(result.riskLevel === "healthy" ? "会话检查完成，当前风险较低" : `会话检查完成：${result.riskLabel}`);
+    } catch (reason) { setError(String(reason)); setMessage("无法检查该会话"); }
+    finally { setHandoffBusy(false); }
+  }
+
+  async function createHandoff() {
+    if (!threadHealth) return;
+    setHandoffBusy(true); setError(null); setMessage("正在整理当天需求、项目资料和进度，并创建新任务…");
+    try {
+      const result = await invoke<HandoffReport>("create_thread_handoff", { request: { threadId: threadHealth.threadId } });
+      setHandoffReport(result);
+      setMessage(`续接任务 ${result.newThreadId} 已创建，正在当前渠道中整理并继续`);
+    } catch (reason) { setError(String(reason)); setMessage("续接任务创建失败，旧任务未受影响"); }
+    finally { setHandoffBusy(false); }
+  }
+
   function editChannel(channel?: Channel) {
     const value = channel ?? { id: `channel-${crypto.randomUUID().slice(0, 8)}`, name: "", baseUrl: "", model: "", reasoningEffort: "medium", modelsPath: "/v1/models", usagePath: "", validatesModelList: true, isBuiltIn: false };
     setDraft({ ...value, secret: "" });
@@ -289,7 +318,7 @@ function App() {
 
   return <div className="shell">
     <header className="topbar">
-      <div className="brand"><div className="brand-mark"><Sparkles size={18} /></div><div><div className="brand-name">Modelay</div><div className="brand-sub">AI 渠道与额度管理器 · 4.0 Alpha</div></div></div>
+      <div className="brand"><div className="brand-mark"><img src="/modelay-logo.png" alt="Modelay" /></div><div><div className="brand-name">Modelay</div><div className="brand-sub">AI 渠道与额度管理器 · 4.0 Beta</div></div></div>
       <div className="top-actions"><span className="platform"><span className={`dot ${state?.configConformant ? "" : "warn"}`} />{state?.platform ?? "读取中"}</span>{updatePhase === "available" && <button className="update-badge" title={`可更新至 ${updateVersion}`} onClick={() => setUpdateOpen(true)}><Download size={13} />新版本</button>}<button className="icon-btn" title="打开备份目录" onClick={() => void invoke("open_backup_folder")}><FolderOpen size={17} /></button><button className="icon-btn" title="帮助" onClick={() => setInfoPanel("help")}><CircleHelp size={17} /></button><button className="icon-btn" title="设置" onClick={() => setInfoPanel("settings")}><Settings2 size={17} /></button></div>
     </header>
     <main className="content">
@@ -313,8 +342,17 @@ function App() {
 
       {report && <section className="panel report-panel"><div className="panel-head"><div><h2>最近一次切换报告</h2><p>{report.providerId} · {report.model} · {reasoningLabels[report.reasoningEffort] ?? report.reasoningEffort} · {sessionScopeLabels[report.sessionScope]} · ${report.imageSkill}</p></div><span className="report-ok"><Check size={15} />已完成</span></div><div className="report-grid">{report.checks.map((check, index) => <div className={`report-row ${check.state}`} key={`${check.title}-${index}`}><span>{check.state === "passed" ? <Check size={14} /> : <AlertTriangle size={14} />}</span><div><strong>{check.title}</strong><small>{check.detail}</small></div></div>)}</div></section>}
 
+      <section className="panel handoff-panel">
+        <div className="handoff-workflow"><div className="panel-head"><div><h2>会话续接助手</h2><p>检查上下文风险，并将当天项目资料、最新需求与进度交接到全新任务</p></div><Activity size={20} className={threadHealth?.riskLevel === "critical" ? "risk-critical" : threadHealth?.riskLevel === "warning" ? "orange" : "green"} /></div>
+          <div className="handoff-input"><label htmlFor="handoff-thread-id">会话 ID</label><div><input id="handoff-thread-id" value={handoffThreadId} onChange={(event) => { setHandoffThreadId(event.target.value); setThreadHealth(null); setHandoffReport(null); }} placeholder="例如 01a041f4-ef73-7560-b418-c930ab8b6af0" spellCheck={false} /><button className="ghost-btn" onClick={() => void inspectThread()} disabled={handoffBusy}>{handoffBusy && !threadHealth ? <RefreshCw size={14} className="spin" /> : <Activity size={14} />}检查会话</button></div></div>
+          {threadHealth && <div className={`thread-health ${threadHealth.riskLevel}`} role="status"><div className="health-head"><span>{threadHealth.riskLabel}</span><strong>{formatTokens(threadHealth.tokensUsed)} tokens</strong></div><h3>{threadHealth.title || threadHealth.threadId}</h3><p>{threadHealth.cwd}</p><div className="health-stats"><span>当天消息 <b>{threadHealth.todayMessageCount}</b></span><span>记录体积 <b>{formatBytes(threadHealth.todayRolloutBytes)}</b></span><span>{threadHealth.providerId} · {threadHealth.model} · {reasoningLabels[threadHealth.reasoningEffort] ?? threadHealth.reasoningEffort}</span></div><ul>{threadHealth.riskReasons.map((reason) => <li key={reason}>{reason}</li>)}</ul>{threadHealth.latestUserRequest && <div className="latest-request"><span>最新需求</span><p>{threadHealth.latestUserRequest}</p></div>}<button className="primary-btn handoff-action" onClick={() => void createHandoff()} disabled={handoffBusy}>{handoffBusy ? <RefreshCw size={15} className="spin" /> : <ArrowRight size={15} />}整理并创建续接任务</button></div>}
+          {handoffReport && <div className="handoff-success" role="status"><Check size={18} /><div><strong>新任务已创建并开始交接</strong><span>{handoffReport.newThreadId}</span><small>已提取当天 {handoffReport.messageCount} 条消息和 {handoffReport.referencedPaths.length} 个引用路径；旧任务保持不变。</small></div><button className="mini-btn" aria-label="复制新任务 ID" title="复制新任务 ID" onClick={() => void navigator.clipboard.writeText(handoffReport.newThreadId)}><Copy size={14} /></button></div>}
+        </div>
+        <aside className="handoff-guide"><div className="guide-title"><FileText size={17} /><div><strong>什么时候需要续接？</strong><span>以下情况可能表现为长时间思考、重新连接或请求失败</span></div></div><div className="guide-list"><div><b>上下文累计过大</b><span>长期项目、频繁工具调用、图片与大型输出会增加恢复和压缩成本。</span></div><div><b>单次请求载荷过大</b><span>历史与新消息合并后可能触发 413、超时或服务端主动断开。</span></div><div><b>渠道或网络不稳定</b><span>第三方首字节慢、限流、模型排队或重启后凭据未生效都会触发重试。</span></div><div><b>模型深度过高</b><span>高、极深或最大推理会显著延长首个响应时间，长任务更容易碰到连接窗口。</span></div></div><div className="guide-solution"><strong>推荐解决方案</strong><span>先检查会话；风险较高时创建续接任务。Modelay 只传递当天精简交接，不复制完整历史，并要求新任务先核对工作区和现有文件。</span></div></aside>
+      </section>
+
       <section className="panel bottom-panel"><div className="bottom-item"><div className="bottom-icon"><KeyRound size={17} /></div><div><strong>系统安全存储</strong><span>API Key 不写入 config.toml 或前端存储</span></div></div><div className="bottom-item"><div className="bottom-icon"><Database size={17} /></div><div><strong>配置与任务双备份</strong><span>SQLite 事务只覆盖用户任务</span></div></div><div className="bottom-item"><div className="bottom-icon"><Copy size={17} /></div><div><strong>生图路由</strong><span>当前默认 ${state?.imageSkill ?? "读取中"}</span></div></div></section>
-      <div className="statusbar"><span><span className={`dot ${error ? "warn" : ""}`} />{message}</span><span>免费开发模式 · 未配置正式代码签名</span></div>
+      <div className="statusbar"><span><span className={`dot ${error ? "warn" : ""}`} />{message}</span></div>
     </main>
 
     {draft && <div className="modal-backdrop"><div className="modal"><div className="modal-head"><div><h2>{state?.channels.some((channel) => channel.id === draft.id) ? `编辑 ${draft.name}` : "添加自定义渠道"}</h2><p>Codex 自定义 Provider 固定使用 Responses API</p></div><button className="icon-btn" onClick={() => setDraft(null)}><X size={18} /></button></div><label>渠道名称<input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></label><label>API 地址<input value={draft.baseUrl} onChange={(event) => setDraft({ ...draft, baseUrl: event.target.value })} placeholder="https://example.com" /></label><label>API 密钥<input type="password" value={draft.secret} onChange={(event) => setDraft({ ...draft, secret: event.target.value })} placeholder={draft.hasSecret ? "留空则保留已保存密钥" : "请输入密钥"} autoComplete="new-password" /></label><div className="form-row"><label>默认模型<input value={draft.model} onChange={(event) => setDraft({ ...draft, model: event.target.value })} /></label><label>默认推理强度<select value={draft.reasoningEffort} onChange={(event) => setDraft({ ...draft, reasoningEffort: event.target.value })}>{Object.entries(reasoningLabels).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label></div><div className="form-row"><label>模型列表路径<input value={draft.modelsPath} onChange={(event) => setDraft({ ...draft, modelsPath: event.target.value })} /></label><label>余额路径<input value={draft.usagePath} onChange={(event) => setDraft({ ...draft, usagePath: event.target.value })} placeholder="留空表示不查询余额" /></label></div><label className="toggle-row"><input type="checkbox" checked={draft.validatesModelList} onChange={(event) => setDraft({ ...draft, validatesModelList: event.target.checked })} />切换前校验服务端模型列表</label><div className="secret-note"><KeyRound size={15} /><span>{draft.hasSecret ? "已有密钥保存在系统凭据库。输入新值会覆盖，留空保持不变。" : "密钥将写入 macOS Keychain 或 Windows Credential Manager，不会返回给界面。"}</span></div><div className="modal-actions">{draft.hasSecret && <button className="danger-btn" onClick={() => setConfirmSecretDelete(true)}>删除密钥</button>}<button className="ghost-btn" onClick={() => setDraft(null)}>取消</button><button className="primary-btn" onClick={() => void saveChannel()} disabled={busy}>保存渠道</button></div></div></div>}
@@ -349,5 +387,8 @@ function Quota({ label, window: quota }: { label: string; window?: UsageWindow }
   const tooltip = `${quotaName}重置时间：${reset}`;
   return <div className="quota-line" title={tooltip} data-reset={tooltip} tabIndex={0} aria-label={tooltip}><span>{label}</span><div><i style={{ width: `${quota?.remainingPercent ?? 0}%` }} /></div><b>{quota ? `${Math.round(quota.remainingPercent)}%` : "—"}</b></div>;
 }
+
+function formatTokens(value: number) { return value >= 1_000_000 ? `${(value / 1_000_000).toFixed(2)}M` : value >= 1_000 ? `${Math.round(value / 1_000)}K` : String(value); }
+function formatBytes(value: number) { return value >= 1024 * 1024 ? `${(value / 1024 / 1024).toFixed(1)} MB` : value >= 1024 ? `${Math.round(value / 1024)} KB` : `${value} B`; }
 
 export default App;

@@ -89,7 +89,7 @@ jobs:
         with:
           tagName: v__VERSION__
           releaseName: "Modelay v__VERSION__"
-          releaseBody: "Fresh installations show only the official Codex channel. Add third-party channels with your own API URL, model, paths, and key. Existing Modelay channels remain unchanged during upgrades. Signed in-app updates are supported."
+          releaseBody: "Modelay 4.0 Beta 1 adds conversation health warnings and one-click task handoff, a smaller quota capsule, unified branding, a transparent monochrome tray icon, and clearer runtime status. Existing channels and old tasks remain unchanged during upgrades. Signed in-app updates are supported."
           releaseDraft: false
           prerelease: false
           uploadUpdaterJson: true

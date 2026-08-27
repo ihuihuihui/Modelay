@@ -2,6 +2,7 @@ mod codex;
 mod commands;
 mod config;
 mod error;
+mod handoff;
 mod models;
 mod paths;
 mod platform;
@@ -46,6 +47,8 @@ pub fn run() {
             commands::get_usage,
             commands::set_widget_mode,
             commands::save_widget_position,
+            commands::get_thread_health,
+            commands::create_thread_handoff,
         ])
         .on_window_event(|window, event| {
             if window.label() == "main" {
@@ -63,8 +66,18 @@ pub fn run() {
             let open_item = MenuItem::with_id(app, "open", "打开 Modelay", true, None::<&str>)?;
             let quit_item = MenuItem::with_id(app, "quit", "退出 Modelay", true, None::<&str>)?;
             let tray_menu = Menu::with_items(app, &[&open_item, &quit_item])?;
-            let mut tray = TrayIconBuilder::new()
+            let tray_icon = tauri::image::Image::new_owned(
+                include_bytes!("../icons/tray-white.rgba").to_vec(),
+                32,
+                32,
+            );
+            let tray = TrayIconBuilder::new()
                 .tooltip("Modelay")
+                .icon(tray_icon)
+                // macOS treats template images as monochrome glyphs and applies the
+                // correct menu-bar tint. The bundled asset is already a transparent
+                // white star, so Windows/Linux keep the same minimal appearance.
+                .icon_as_template(cfg!(target_os = "macos"))
                 .menu(&tray_menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
@@ -85,9 +98,6 @@ pub fn run() {
                         show_main_window(tray.app_handle());
                     }
                 });
-            if let Some(icon) = app.default_window_icon() {
-                tray = tray.icon(icon.clone());
-            }
             tray.build(app)?;
             if let Some(window) = app.get_webview_window("usage") {
                 platform::configure_usage_window(&window)?;

@@ -1,7 +1,7 @@
 use crate::config;
 use crate::error::{command_error, ModelayError, Result};
 use crate::models::*;
-use crate::{codex, paths, platform, secrets, sessions, storage, usage};
+use crate::{codex, handoff, paths, platform, secrets, sessions, storage, usage};
 use std::sync::Mutex;
 use tauri::Manager;
 
@@ -16,6 +16,73 @@ pub async fn get_app_state() -> std::result::Result<AppState, String> {
 #[tauri::command]
 pub async fn get_widget_state() -> std::result::Result<WidgetState, String> {
     run_blocking(widget_state).await
+}
+
+#[tauri::command]
+pub async fn get_thread_health(thread_id: String) -> std::result::Result<ThreadHealth, String> {
+    run_blocking(move || handoff::inspect(thread_id.trim()).map(|(_, _, health)| health)).await
+}
+
+#[tauri::command]
+pub async fn create_thread_handoff(
+    request: HandoffRequest,
+) -> std::result::Result<HandoffReport, String> {
+    run_blocking(move || create_thread_handoff_inner(request)).await
+}
+
+fn create_thread_handoff_inner(request: HandoffRequest) -> Result<HandoffReport> {
+    let _guard = lock_mutations()?;
+    let (record, content, health) = handoff::inspect(request.thread_id.trim())?;
+    let config_document = config::read()?;
+    let provider = config::active_provider(&config_document.document);
+    let model = config::active_model(&config_document.document);
+    let effort = config::active_reasoning_effort(&config_document.document);
+    if model.trim().is_empty() {
+        return Err("当前 Codex 配置没有可用模型。".into());
+    }
+    let preferences = storage::load_preferences()?;
+    let mut environment = preferences
+        .channels
+        .iter()
+        .map(|channel| (channel.environment_key(), None))
+        .collect::<Vec<(String, Option<String>)>>();
+    if !provider.starts_with("openai") {
+        let channel = preferences
+            .channels
+            .iter()
+            .find(|channel| channel.provider_id() == provider)
+            .ok_or_else(|| ModelayError::Message("当前第三方渠道未在 Modelay 中配置。".into()))?;
+        let secret = secrets::get(channel)?
+            .ok_or_else(|| ModelayError::Message("当前第三方渠道缺少 API 密钥。".into()))?;
+        if let Some((_, value)) = environment
+            .iter_mut()
+            .find(|(key, _)| key == &channel.environment_key())
+        {
+            *value = Some(secret);
+        }
+    }
+    let environment_refs = environment
+        .iter()
+        .map(|(key, value)| (key.as_str(), value.as_deref()))
+        .collect::<Vec<_>>();
+    let prompt = handoff::build_prompt(&record, &content);
+    let new_thread_id = codex::create_handoff_thread(
+        prompt,
+        &record.cwd,
+        &provider,
+        &model,
+        &effort,
+        &environment_refs,
+    )?;
+    Ok(HandoffReport {
+        source_thread_id: record.id,
+        new_thread_id,
+        title: record.title,
+        cwd: record.cwd,
+        message_count: content.messages.len(),
+        referenced_paths: content.referenced_paths,
+        risk_level: health.risk_level,
+    })
 }
 
 async fn run_blocking<T, F>(task: F) -> std::result::Result<T, String>
