@@ -346,7 +346,6 @@ pub fn create_handoff_thread(
     cwd: &str,
     provider: &str,
     model: &str,
-    effort: &str,
     environment: &[(&str, Option<&str>)],
 ) -> Result<String> {
     let mut process = RpcProcess::spawn_with_environment(environment)?;
@@ -369,26 +368,41 @@ pub fn create_handoff_thread(
     // A user message is persisted by starting a real turn. Interrupt it as soon
     // as Codex accepts the input so no model work keeps the new thread owned by
     // Modelay's short-lived app-server process.
-    let turn = process.request(
+    let turn = match process.request(
         "turn/start",
-        json!({
-            "threadId": thread_id,
-            "input": [{"type": "text", "text": prompt}],
-            "model": model,
-            "effort": effort
-        }),
+        handoff_turn_params(&thread_id, prompt),
         Duration::from_secs(30),
-    )?;
+    ) {
+        Ok(turn) => turn,
+        Err(error) => {
+            let _ = process.request(
+                "thread/archive",
+                json!({"threadId": thread_id}),
+                Duration::from_secs(10),
+            );
+            return Err(error);
+        }
+    };
     let turn_id = turn
         .pointer("/turn/id")
         .and_then(Value::as_str)
         .ok_or_else(|| ModelayError::Message("Codex 未返回续接轮次 ID。".into()))?;
-    process.request(
+    // Once turn/start returns, Codex has accepted and persisted the user
+    // message. The turn may already have stopped before the interrupt arrives,
+    // so an interrupt error must not turn a valid handoff into a false failure.
+    let _ = process.request(
         "turn/interrupt",
         json!({"threadId": thread_id, "turnId": turn_id}),
-        Duration::from_secs(30),
-    )?;
+        Duration::from_secs(10),
+    );
     Ok(thread_id)
+}
+
+fn handoff_turn_params(thread_id: &str, prompt: String) -> Value {
+    json!({
+        "threadId": thread_id,
+        "input": [{"type": "text", "text": prompt}]
+    })
 }
 
 impl Drop for RpcProcess {
@@ -555,5 +569,14 @@ mod tests {
         assert!(!redacted.contains("bearer-value"));
         assert!(!redacted.contains("json-value"));
         assert!(!redacted.contains("sk-testCredential123"));
+    }
+
+    #[test]
+    fn handoff_turn_uses_the_thread_model_without_repeating_overrides() {
+        let params = handoff_turn_params("thread-id", "交接内容".into());
+        assert_eq!(params["threadId"], "thread-id");
+        assert_eq!(params["input"][0]["text"], "交接内容");
+        assert!(params.get("model").is_none());
+        assert!(params.get("effort").is_none());
     }
 }

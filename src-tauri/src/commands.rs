@@ -36,7 +36,6 @@ fn create_thread_handoff_inner(request: HandoffRequest) -> Result<HandoffReport>
     let config_document = config::read()?;
     let provider = config::active_provider(&config_document.document);
     let model = config::active_model(&config_document.document);
-    let effort = config::active_reasoning_effort(&config_document.document);
     if model.trim().is_empty() {
         return Err("当前 Codex 配置没有可用模型。".into());
     }
@@ -66,14 +65,8 @@ fn create_thread_handoff_inner(request: HandoffRequest) -> Result<HandoffReport>
         .map(|(key, value)| (key.as_str(), value.as_deref()))
         .collect::<Vec<_>>();
     let prompt = handoff::build_prompt(&record, &content);
-    let new_thread_id = codex::create_handoff_thread(
-        prompt,
-        &record.cwd,
-        &provider,
-        &model,
-        &effort,
-        &environment_refs,
-    )?;
+    let new_thread_id =
+        codex::create_handoff_thread(prompt, &record.cwd, &provider, &model, &environment_refs)?;
     Ok(HandoffReport {
         source_thread_id: record.id,
         new_thread_id,
