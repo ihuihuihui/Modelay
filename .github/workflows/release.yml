@@ -45,6 +45,32 @@ jobs:
           SIGNING_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           SIGNING_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: test -n "$SIGNING_KEY" && test -n "$SIGNING_PASSWORD"
+      - name: Import stable macOS development signing identity
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          MODELAY_MACOS_CERTIFICATE: ${{ secrets.MODELAY_MACOS_CERTIFICATE }}
+          MODELAY_MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MODELAY_MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "$MODELAY_MACOS_CERTIFICATE"
+          test -n "$MODELAY_MACOS_CERTIFICATE_PASSWORD"
+          certificate_path="$RUNNER_TEMP/modelay-development-code-signing.p12"
+          certificate_pem="$RUNNER_TEMP/modelay-development-code-signing.pem"
+          keychain_path="$RUNNER_TEMP/modelay-signing.keychain-db"
+          keychain_password="$(openssl rand -hex 24)"
+          printf '%s' "$MODELAY_MACOS_CERTIFICATE" | base64 --decode > "$certificate_path"
+          security create-keychain -p "$keychain_password" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$keychain_password" "$keychain_path"
+          security import "$certificate_path" -k "$keychain_path" -P "$MODELAY_MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain_path"
+          security find-certificate -c "Modelay Development Code Signing" -p "$keychain_path" > "$certificate_pem"
+          security add-trusted-cert -d -r trustRoot -p codeSign -k "$keychain_path" "$certificate_pem"
+          security list-keychains -d user -s "$keychain_path"
+          signing_identity="$(security find-identity -v -p codesigning "$keychain_path" | awk 'NR == 1 { print $2 }')"
+          test -n "$signing_identity"
+          echo "APPLE_SIGNING_IDENTITY=$signing_identity" >> "$GITHUB_ENV"
       - name: Configure the public update feed
         env:
           MODELAY_UPDATE_ENDPOINT: https://github.com/${{ github.repository }}/releases/latest/download/latest.json

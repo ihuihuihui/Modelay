@@ -96,7 +96,7 @@ fn join_pipe(reader: Option<std::thread::JoinHandle<std::io::Result<Vec<u8>>>>) 
     }
 }
 
-pub fn redact(text: &str) -> String {
+fn redact_full(text: &str) -> String {
     let text = Regex::new(r"sk-[A-Za-z0-9_-]{8,}")
         .unwrap()
         .replace_all(text, "<已隐藏>")
@@ -108,9 +108,11 @@ pub fn redact(text: &str) -> String {
     Regex::new(r#"(?i)(\"(?:api[_-]?key|access[_-]?token|refresh[_-]?token)\"\s*:\s*\")[^\"]+"#)
         .unwrap()
         .replace_all(&text, "$1<已隐藏>")
-        .chars()
-        .take(4000)
-        .collect()
+        .into_owned()
+}
+
+pub fn redact(text: &str) -> String {
+    redact_full(text).chars().take(4000).collect()
 }
 
 fn redact_with_secrets<'a>(text: &str, secrets: impl IntoIterator<Item = &'a str>) -> String {
@@ -120,7 +122,7 @@ fn redact_with_secrets<'a>(text: &str, secrets: impl IntoIterator<Item = &'a str
             sanitized = sanitized.replace(secret, "<已隐藏>");
         }
     }
-    redact(&sanitized)
+    redact_full(&sanitized)
 }
 
 pub fn login_status() -> bool {
@@ -383,6 +385,23 @@ mod tests {
     fn doctor_accepts_json_surrounded_by_non_json_output() {
         let fixture = "warning before\n{\"overallStatus\":\"ok\",\"checks\":{\"config.load\":{\"status\":\"ok\"},\"auth.credentials\":{\"status\":\"ok\"}}}\nwarning after";
         assert_eq!(parse_doctor(fixture, true).unwrap(), "配置与认证诊断通过");
+    }
+
+    #[test]
+    fn doctor_accepts_pretty_json_larger_than_the_display_limit() {
+        let fixture = serde_json::to_string_pretty(&json!({
+            "schemaVersion": 1,
+            "overallStatus": "fail",
+            "checks": {
+                "config.load": {"status": "ok", "details": {"feature flags": "x".repeat(6000)}},
+                "auth.credentials": {"status": "ok"},
+                "network.provider_reachability": {"status": "warning"}
+            }
+        }))
+        .unwrap();
+        let sanitized = redact_with_secrets(&fixture, std::iter::empty::<&str>());
+        assert!(sanitized.len() > 4000);
+        assert!(parse_doctor(&sanitized, false).unwrap().contains("非阻塞"));
     }
 
     #[test]

@@ -25,7 +25,8 @@ cd "$project_dir"
 export PATH="$HOME/.cargo/bin:$PATH"
 npm run tauri build -- --bundles app
 mkdir -p "$output_dir"
-/usr/bin/codesign --force --deep --sign - "$app_path"
+signing_identity=${APPLE_SIGNING_IDENTITY:--}
+/usr/bin/codesign --force --deep --sign "$signing_identity" "$app_path"
 /usr/bin/codesign --verify --deep --strict "$app_path"
 /usr/bin/ditto -c -k --sequesterRsrc --keepParent "$app_path" "$zip_path"
 /usr/bin/ditto "$app_path" "$staging_dir/Modelay.app"

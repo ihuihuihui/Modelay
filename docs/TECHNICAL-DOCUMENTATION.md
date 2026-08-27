@@ -43,7 +43,7 @@ supports_websockets = false
 
 1. 校验 URL、密钥和模型。
 2. 在任何真实写入之前保存配置备份和 SQLite 在线一致性备份，并读取旧环境变量、生图路由和偏好。
-3. 原子写入新配置，清除非目标第三方渠道的环境变量，仅注入目标渠道，并设置生图路由。
+3. 原子写入新配置，设置目标渠道环境变量并更新生图路由；清除所有非目标第三方环境变量。每个 Codex 子进程仍会先清空全部 Provider 密钥再只注入目标渠道，避免诊断和运行串用凭据。
 4. 运行 `codex doctor --json`，解析 `config.load` 与 `auth.credentials`；终端等非关键警告不会误阻断切换。
 5. 验证官方登录/模型，或第三方模型和服务可达性。
 6. 保存新的 Modelay 偏好。
@@ -65,7 +65,7 @@ supports_websockets = false
 - 官方额度：`account/rateLimits/read`，兼容单桶和多桶响应。存在 `rateLimitsByLimitId.codex` 时明确优先 Codex 桶，避免误用 `base_model_inference` 等同周期额度；界面按 `windowDurationMins` 动态显示 5 小时、15 分钟、1 小时、周额度等真实标签。
 - 第三方余额：兼容 `remaining`、`balance` 和 `quota.remaining`。
 
-Codex 子进程的 stdout/stderr 会在独立线程持续读取，避免输出填满管道后阻塞；命令超时会终止并回收子进程。Doctor 启动时会显式移除所有非目标渠道环境变量，只注入目标渠道密钥；输出在截断前同时按当前完整密钥、Bearer 认证头、常见 JSON 凭据字段和 `sk-` 形式脱敏。app-server RPC 无论成功、写入失败或超时都会关闭 stdin、终止进程并等待读取线程退出，避免周期性额度和模型请求累积孤儿进程。
+Codex 子进程的 stdout/stderr 会在独立线程持续读取，避免输出填满管道后阻塞；命令超时会终止并回收子进程。Doctor 启动时会显式移除所有非目标渠道环境变量，只注入目标渠道密钥；完整输出先按当前密钥、Bearer 认证头、常见 JSON 凭据字段和 `sk-` 形式脱敏，再解析完整 JSON，只有最终展示给用户的错误摘要才受字符上限限制。这样当前包含大量 feature flags、Git 和网络细节的 Doctor 报告不会在解析前被截断。app-server RPC 无论成功、写入失败或超时都会关闭 stdin、终止进程并等待读取线程退出，避免周期性额度和模型请求累积孤儿进程。
 
 第三方服务检查会阻断 401/403 密钥拒绝、429 限流和 5xx 服务故障；404/405 仍可视为主服务可达，适用于未实现模型列表路径且关闭了模型校验的 Responses 中转站。服务错误正文如果回显当前密钥，会在进入错误报告前按完整密钥脱敏。
 
@@ -77,7 +77,9 @@ Codex 子进程的 stdout/stderr 会在独立线程持续读取，避免输出�
 
 ## 平台适配
 
-macOS 使用 Keychain、`launchctl setenv`、ChatGPT 应用探测和 `open -a ChatGPT`。对于用户已经保存的渠道，状态读取会先检查该渠道自己的启动环境变量，再通过 Security Framework 的非交互查询读取 Modelay 凭据，并跳过需要认证的项目；运行时不启动 `/usr/bin/security`，也不在后台自动复制或更新密钥。Keychain 写入和删除只发生在用户明确保存或删除密钥时。额度胶囊添加 `NSWindowStyleMaskNonactivatingPanel` 和全空间辅助窗口行为。
+macOS 使用 Keychain、`launchctl setenv`、ChatGPT 应用探测和 `open -a ChatGPT`。`alpha.5` 将渠道密钥写入新的 `app.modelay.desktop.v2` service，不再隐式读取可能绑定旧 ad-hoc 身份的 `app.modelay.desktop` 项。状态读取优先使用渠道的用户会话环境和进程内缓存，再通过 Security Framework 非交互读取新 service；只有用户明确保存或更新密钥时才写入 Keychain，读取状态和切换不会在后台迁移密钥。切换渠道时清除所有非目标环境变量，Codex 子进程仍严格隔离非目标密钥。运行时不启动 `/usr/bin/security`。
+
+公开 macOS 包另外使用固定的自签名开发代码签名证书。不同版本的 designated requirement 均为 `identifier "app.modelay.desktop"` 加同一证书根指纹，不再使用每次构建都会变化的 ad-hoc `cdhash`。证书私钥保存在 `/Users/Admin/Library/Application Support/Modelay Development/code-signing`，密码位于 macOS Keychain；GitHub Actions 只通过加密 Secrets 导入 P12。该签名用于稳定 Keychain 代码身份，仍不属于 Apple Developer ID，也不能替代 Gatekeeper 公证。
 
 Windows 使用 Credential Manager、`HKCU\\Environment` 和 `WM_SETTINGCHANGE` 广播环境更新，探测常见安装目录、运行中的 ChatGPT 进程和 Microsoft Store/MSIX 包；重启时优先复用可执行文件，必要时通过 Windows App ID 启动。额度胶囊添加 `WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW`，并通过 `SetWindowPos(..., SWP_FRAMECHANGED)` 立即应用扩展样式。
 
@@ -85,9 +87,9 @@ Windows 使用 Credential Manager、`HKCU\\Environment` 和 `WM_SETTINGCHANGE` �
 
 Rust 单元测试覆盖 TOML 保留、原子覆盖、精确文件快照、Provider/URL、全新安装仅官方渠道、已有 AiLink 渠道升级保留、Doctor、官方/第三方额度、Codex 多额度桶优先级、Provider 动态识别、数据库锁回滚，以及当前/旧版 SQLite 表结构。TypeScript 测试覆盖悬浮窗边缘几何、动态额度周期标签、模型选择和更新错误/进度状态。GitHub Actions 在 Linux 运行这些测试，并在 macOS、Windows 生成应用包；Windows Rust/Win32 源码也使用 `cargo-xwin` 与 Windows CRT/SDK 完成交叉编译检查。
 
-当前自动验证基线为 Rust 23 项单元测试和 TypeScript 13 项悬浮窗/额度标签/模型选择/更新状态测试全部通过；Rust Clippy 全目标零警告、TypeScript 类型检查、Vite 生产构建、npm 生产依赖高危漏洞检查及 `x86_64-pc-windows-msvc` 交叉检查通过。Windows 交叉检查验证 Rust/Win32 源码，Windows runner 已成功生成 `v4.0.0-alpha.4` NSIS 安装器；运行行为仍需 Windows 实机验收。
+当前自动验证基线为 Rust 26 项单元测试和 TypeScript 13 项悬浮窗/额度标签/模型选择/更新状态测试全部通过；新增 Doctor 大型 pretty JSON、稳定 Keychain service 和进程缓存回归用例。Rust Clippy 全目标零警告、TypeScript 类型检查、Vite 生产构建、npm 生产依赖高危漏洞检查及 `x86_64-pc-windows-msvc` 交叉检查通过。Windows 交叉检查验证 Rust/Win32 源码，Windows runner 已成功生成 `v4.0.0-alpha.4` NSIS 安装器；运行行为仍需 Windows 实机验收。
 
-`tauri.windows.conf.json` 将 Windows 默认 bundle 设为 NSIS 与 MSI。`scripts/package-windows.ps1` 负责复制安装器并生成 SHA-256 文件；macOS 脚本会自动识别 arm64/x64、执行 ad-hoc 签名、严格签名验证、DMG 验证并生成 SHA-256 文件。两平台安装包统一写入顶层 `artifacts/installers`，不再放进会被 Vite 清空的 `dist` 目录。常规 CI 构建两平台安装包；版本标签发布工作流会校验标签与 `package.json` 版本完全一致，再由官方 Tauri Action 创建 GitHub Release、签名更新包和 `latest.json`。
+`tauri.windows.conf.json` 将 Windows 默认 bundle 设为 NSIS 与 MSI。`scripts/package-windows.ps1` 负责复制安装器并生成 SHA-256 文件；macOS 脚本会自动识别 arm64/x64，优先使用 CI 注入的固定开发签名身份（本地未注入时回退 ad-hoc），然后执行严格签名验证、DMG 验证并生成 SHA-256 文件。两平台安装包统一写入顶层 `artifacts/installers`，不再放进会被 Vite 清空的 `dist` 目录。常规 CI 构建两平台安装包；版本标签发布工作流会校验标签与 `package.json` 版本完全一致，再由官方 Tauri Action 创建 GitHub Release、签名更新包和 `latest.json`。
 
 Windows bundle 目标由 `scripts/windows-bundles.mjs` 根据版本选择：正式版本和纯数字预发布版本生成 NSIS 与 MSI；包含 `alpha`、`beta` 等文字预发布标识时仅生成 NSIS，因为 WiX/MSI 的 ProductVersion 不接受非数字预发布字段。NSIS 是 Windows 自动更新首选产物，不影响应用内升级；正式版本仍会恢复 MSI。
 

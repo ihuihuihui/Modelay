@@ -543,7 +543,7 @@ fn switch_inner(request: SwitchRequest) -> Result<SwitchReport> {
             });
             checks.push(CheckResult {
                 title: "渠道环境变量".into(),
-                detail: "已清除所有第三方渠道的启动环境变量".into(),
+                detail: "已清除所有非目标第三方渠道的启动环境变量".into(),
                 state: CheckState::Passed,
             });
         } else {

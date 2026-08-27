@@ -2,8 +2,37 @@ use crate::error::{ModelayError, Result};
 use crate::models::ChannelProfile;
 #[cfg(target_os = "macos")]
 use crate::platform;
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
 
+#[cfg(target_os = "macos")]
+const SERVICE: &str = "app.modelay.desktop.v2";
+#[cfg(not(target_os = "macos"))]
 const SERVICE: &str = "app.modelay.desktop";
+
+fn secret_cache() -> &'static Mutex<HashMap<String, String>> {
+    static CACHE: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn cached(channel: &ChannelProfile) -> Option<String> {
+    secret_cache()
+        .lock()
+        .ok()
+        .and_then(|cache| cache.get(&account(channel)).cloned())
+}
+
+fn remember(channel: &ChannelProfile, secret: &str) {
+    if let Ok(mut cache) = secret_cache().lock() {
+        cache.insert(account(channel), secret.to_owned());
+    }
+}
+
+fn forget(channel: &ChannelProfile) {
+    if let Ok(mut cache) = secret_cache().lock() {
+        cache.remove(&account(channel));
+    }
+}
 
 fn account(channel: &ChannelProfile) -> String {
     if channel.id == "ailink" {
@@ -34,9 +63,17 @@ pub fn stored(channel: &ChannelProfile) -> Result<Option<String>> {
 pub fn get(channel: &ChannelProfile) -> Result<Option<String>> {
     #[cfg(target_os = "macos")]
     if let Some(value) = platform::get_user_environment(&channel.environment_key())? {
+        remember(channel, &value);
         return Ok(Some(value));
     }
-    stored(channel)
+    if let Some(value) = cached(channel) {
+        return Ok(Some(value));
+    }
+    let value = stored(channel)?;
+    if let Some(secret) = value.as_deref() {
+        remember(channel, secret);
+    }
+    Ok(value)
 }
 
 pub fn has(channel: &ChannelProfile) -> bool {
@@ -47,15 +84,21 @@ pub fn set(channel: &ChannelProfile, secret: &str) -> Result<()> {
     if secret.trim().is_empty() {
         return Err("API 密钥不能为空。".into());
     }
-    entry(SERVICE, channel)?.set_password(secret.trim())?;
+    let secret = secret.trim();
+    entry(SERVICE, channel)?.set_password(secret)?;
+    remember(channel, secret);
     Ok(())
 }
 
 pub fn delete(channel: &ChannelProfile) -> Result<()> {
-    match entry(SERVICE, channel)?.delete_credential() {
+    let result = match entry(SERVICE, channel)?.delete_credential() {
         Ok(_) | Err(keyring::Error::NoEntry) => Ok(()),
         Err(error) => Err(error.into()),
+    };
+    if result.is_ok() {
+        forget(channel);
     }
+    result
 }
 
 #[cfg(target_os = "macos")]
@@ -78,4 +121,25 @@ fn read_noninteractive(service: &str, account: &str) -> Option<String> {
             })
         })
         .filter(|value| !value.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn process_cache_survives_environment_changes_without_keychain_reads() {
+        let channel = ChannelProfile::ailink();
+        forget(&channel);
+        remember(&channel, "cached-secret");
+        assert_eq!(cached(&channel).as_deref(), Some("cached-secret"));
+        forget(&channel);
+        assert!(cached(&channel).is_none());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_uses_the_stable_second_generation_keychain_service() {
+        assert_eq!(SERVICE, "app.modelay.desktop.v2");
+    }
 }

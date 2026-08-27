@@ -16,6 +16,8 @@ Modelay 是面向 Codex/ChatGPT 桌面端的跨平台渠道与额度管理器，
 - 活跃渠道修改或删除密钥时同步更新启动环境变量，失败会恢复原密钥、环境与偏好。
 - 全新安装只显示官方 Codex，不内置第三方地址、模型或密钥，也不自动导入 CodexSwitch、环境变量或旧 Keychain；升级会保留用户已保存的 Modelay 渠道。
 - 自定义渠道会校验 HTTPS、本机 HTTP、渠道 ID 和 Provider 冲突，避免生成不可区分的配置。
+- Codex Doctor 在完整脱敏 JSON 上完成解析，超长诊断不会再因界面显示上限被截成无效 JSON。
+- macOS 发布包使用固定的免费开发签名身份；新保存的渠道密钥改用独立 Keychain service，并保留进程缓存和用户会话环境，避免切换或自动额度刷新反复弹出钥匙串授权。升级后可能需要明确保存一次既有密钥，但不会在后台读取或迁移旧凭据。
 - 切换后提供“立即重启 / 稍后手动重启”。
 - 启动后自动检查签名更新，设置页支持手动检查、更新说明、下载进度、一键安装和自动重启；签名无效时拒绝安装。
 
@@ -64,13 +66,14 @@ Rust/Win32 代码已使用 `cargo-xwin` 和 Windows CRT/SDK 完成交叉编译�
 - `.github/workflows/release.yml` 在推送与 `package.json` 版本一致的 `v*` 标签时创建 GitHub Release，例如 `v4.0.0-alpha.4`，并发布签名更新产物与 `latest.json`。
 - 更新公钥已写入应用；加密私钥只保存在本机 `/Users/Admin/Library/Application Support/Modelay Development/updater/modelay-updater.key`，密码保存在 macOS Keychain，不进入仓库。
 - 发布仓库需要公开读取 Release 资产，并在 GitHub Actions Secrets 中配置 `TAURI_SIGNING_PRIVATE_KEY` 与 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`。
+- macOS 固定开发签名证书通过 `MODELAY_MACOS_CERTIFICATE` 与 `MODELAY_MACOS_CERTIFICATE_PASSWORD` 两项 Secret 注入；它只稳定免费包的代码身份，不等同于 Apple Developer ID 或公证。
 - 当前公开发布仓库为 `ihuihuihui/Modelay`，`v4.0.0-alpha.4` 已完成 macOS 与 Windows 构建并上线公开更新清单。
 - 旧的 `4.0.0-alpha.1` 安装包没有更新器，因此需要手动安装一次当前 `4.0.0-alpha.4`；`alpha.3` 用户可以直接在应用内升级。
 - Windows 的非数字预发布版本生成 NSIS `.exe`；WiX/MSI 要求数字兼容版本，因此 MSI 从正式纯数字版本恢复生成。
 
 ## 当前验证结果
 
-- Rust 单元测试：23 项通过。
+- Rust 单元测试：26 项通过。
 - TypeScript 悬浮窗、额度标签、模型选择和更新状态测试：13 项通过。
 - Rust Clippy 全目标零警告：通过。
 - TypeScript 检查与 Vite 生产构建：通过。
