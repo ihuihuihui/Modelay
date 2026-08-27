@@ -61,10 +61,11 @@ Rust/Win32 代码已使用 `cargo-xwin` 和 Windows CRT/SDK 完成交叉编译�
 ## 免费发布准备
 
 - `.github/workflows/build.yml` 会测试后同时生成 macOS ZIP/DMG 与 Windows NSIS/MSI，并附 SHA-256 文件。
-- `.github/workflows/release.yml` 在推送与 `package.json` 版本一致的 `v*` 标签时创建 GitHub Release，例如 `v4.0.0-alpha.2`，并发布签名更新产物与 `latest.json`。
+- `.github/workflows/release.yml` 在推送与 `package.json` 版本一致的 `v*` 标签时创建 GitHub Release，例如 `v4.0.0-alpha.3`，并发布签名更新产物与 `latest.json`。
 - 更新公钥已写入应用；加密私钥只保存在本机 `/Users/Admin/Library/Application Support/Modelay Development/updater/modelay-updater.key`，密码保存在 macOS Keychain，不进入仓库。
 - 发布仓库需要公开读取 Release 资产，并在 GitHub Actions Secrets 中配置 `TAURI_SIGNING_PRIVATE_KEY` 与 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`。
-- 旧的 `4.0.0-alpha.1` 安装包没有更新器，因此需要手动安装一次 `4.0.0-alpha.2`；从该版本开始才可应用内升级。
+- 旧的 `4.0.0-alpha.1` 安装包没有更新器，因此需要手动安装一次 `4.0.0-alpha.3`；从该版本开始才可应用内升级。
+- Windows 的非数字预发布版本生成 NSIS `.exe`；WiX/MSI 要求数字兼容版本，因此 MSI 从正式纯数字版本恢复生成。
 
 ## 当前验证结果
 

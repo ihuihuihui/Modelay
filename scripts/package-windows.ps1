@@ -9,7 +9,9 @@ $outputDir = Join-Path $projectDir "artifacts\installers"
 
 Set-Location $projectDir
 if (-not $SkipBuild) {
-  npm run tauri build -- --bundles nsis,msi
+  $bundles = node scripts/windows-bundles.mjs
+  if ($LASTEXITCODE -ne 0) { throw "Could not determine Windows bundle targets." }
+  npm run tauri build -- --bundles $bundles
   if ($LASTEXITCODE -ne 0) { throw "Tauri Windows build failed." }
 }
 

@@ -87,6 +87,8 @@ Rust 单元测试覆盖 TOML 保留、原子覆盖、精确文件快照、Provid
 
 `tauri.windows.conf.json` 将 Windows 默认 bundle 设为 NSIS 与 MSI。`scripts/package-windows.ps1` 负责复制安装器并生成 SHA-256 文件；macOS 脚本会自动识别 arm64/x64、执行 ad-hoc 签名、严格签名验证、DMG 验证并生成 SHA-256 文件。两平台安装包统一写入顶层 `artifacts/installers`，不再放进会被 Vite 清空的 `dist` 目录。常规 CI 构建两平台安装包；版本标签发布工作流会校验标签与 `package.json` 版本完全一致，再由官方 Tauri Action 创建 GitHub Release、签名更新包和 `latest.json`。
 
+Windows bundle 目标由 `scripts/windows-bundles.mjs` 根据版本选择：正式版本和纯数字预发布版本生成 NSIS 与 MSI；包含 `alpha`、`beta` 等文字预发布标识时仅生成 NSIS，因为 WiX/MSI 的 ProductVersion 不接受非数字预发布字段。NSIS 是 Windows 自动更新首选产物，不影响应用内升级；正式版本仍会恢复 MSI。
+
 Updater 已在 Rust 运行时注册，并通过最小权限开放检查、下载和安装命令。主窗口启动 4 秒后自动检查一次，设置页也可手动检查；发现新版本后显示版本号、发行说明和下载进度，安装结束后调用进程插件重启。下载内容必须通过嵌入公钥验证，签名错误会明确拒绝安装。常规本地构建继续关闭 `createUpdaterArtifacts`；只有发布配置 `tauri.release.generated.json` 临时开启它并注入 HTTPS 更新端点，避免开发包意外连接不存在的发布源。
 
 更新签名私钥为加密文件，保存在 `/Users/Admin/Library/Application Support/Modelay Development/updater/modelay-updater.key`，权限为 `0600`；密码保存在 macOS Keychain 的 `app.modelay.desktop updater signing` 项。仓库只包含公钥。GitHub Actions 使用 `TAURI_SIGNING_PRIVATE_KEY` 与 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` 两项 Secret，更新端点在构建时根据 `${{ github.repository }}` 生成。该更新签名独立于 Apple Developer ID 和 Windows Authenticode 代码签名。

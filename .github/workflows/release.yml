@@ -29,9 +29,7 @@ jobs:
       matrix:
         include:
           - platform: macos-latest
-            args: "--bundles app,dmg --config src-tauri/tauri.release.generated.json"
           - platform: windows-latest
-            args: "--bundles nsis,msi --config src-tauri/tauri.release.generated.json"
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
@@ -51,6 +49,16 @@ jobs:
         env:
           MODELAY_UPDATE_ENDPOINT: https://github.com/${{ github.repository }}/releases/latest/download/latest.json
         run: npm run prepare:update-config
+      - name: Select platform bundles
+        id: bundle-args
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            bundles=$(node scripts/windows-bundles.mjs)
+          else
+            bundles="app,dmg"
+          fi
+          echo "args=--bundles $bundles --config src-tauri/tauri.release.generated.json" >> "$GITHUB_OUTPUT"
       - uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -64,4 +72,4 @@ jobs:
           prerelease: false
           uploadUpdaterJson: true
           updaterJsonPreferNsis: true
-          args: ${{ matrix.args }}
+          args: ${{ steps.bundle-args.outputs.args }}
