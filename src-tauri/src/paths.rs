@@ -30,13 +30,3 @@ pub fn image_routing_path() -> Result<PathBuf> {
 pub fn backup_dir() -> Result<PathBuf> {
     Ok(support_dir()?.join("Backups"))
 }
-
-#[cfg(target_os = "macos")]
-pub fn legacy_support_dir() -> Result<PathBuf> {
-    Ok(home_dir()?.join("Library/Application Support/CodexSwitch"))
-}
-
-#[cfg(not(target_os = "macos"))]
-pub fn legacy_support_dir() -> Result<PathBuf> {
-    Ok(support_dir()?.join("_no_legacy_data"))
-}

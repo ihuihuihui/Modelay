@@ -4,7 +4,7 @@ Modelay 是面向 Codex/ChatGPT 桌面端的跨平台渠道与额度管理器，
 
 ## 已实现
 
-- OpenAI 官方、AiLink 和任意 Responses 兼容第三方渠道切换。
+- OpenAI 官方与用户自行配置的 Responses 兼容第三方渠道切换。
 - 原子修改 `~/.codex/config.toml`，保留 MCP、插件、注释和未知字段。
 - macOS Keychain / Windows Credential Manager 安全保存 API Key，前端只读取 `hasSecret`。
 - 官方/第三方动态模型、真实额度、任务索引备份与用户任务 Provider/模型覆盖。多额度桶会明确优先 Codex 桶，短周期标签按服务端 `windowDurationMins` 显示，不会把 15 分钟或 1 小时误写成 5 小时。
@@ -14,7 +14,7 @@ Modelay 是面向 Codex/ChatGPT 桌面端的跨平台渠道与额度管理器，
 - 胶囊使用轻量状态接口，不会每 2 秒重复启动 Codex 登录检查；macOS/Windows 使用原生无激活窗口样式。
 - 主窗口关闭后转入后台；系统托盘/再次启动可恢复主窗口，单实例保护避免重复运行。点击额度胶囊仍不会打开主界面。
 - 活跃渠道修改或删除密钥时同步更新启动环境变量，失败会恢复原密钥、环境与偏好。
-- 兼容导入 CodexSwitch 3.x 多渠道偏好和 2.x `aiLink`/`ailink.json` 配置，旧数据不删除。
+- 全新安装只显示官方 Codex，不内置第三方地址、模型或密钥，也不自动导入 CodexSwitch、环境变量或旧 Keychain；升级会保留用户已保存的 Modelay 渠道。
 - 自定义渠道会校验 HTTPS、本机 HTTP、渠道 ID 和 Provider 冲突，避免生成不可区分的配置。
 - 切换后提供“立即重启 / 稍后手动重启”。
 - 启动后自动检查签名更新，设置页支持手动检查、更新说明、下载进度、一键安装和自动重启；签名无效时拒绝安装。
@@ -82,6 +82,6 @@ Rust/Win32 代码已使用 `cargo-xwin` 和 Windows CRT/SDK 完成交叉编译�
 
 ## 尚需人工验收
 
-- 首次 OpenAI → AiLink → OpenAI 真实往返会修改 Codex 配置、任务数据库并重启 ChatGPT，需要用户在执行前确认。
+- 首次 OpenAI → 自定义渠道 → OpenAI 真实往返会修改 Codex 配置、任务数据库并重启 ChatGPT，需要用户在执行前确认。
 - Windows 运行时行为需要 Windows 实机验收。
 - Apple/Windows 正式代码签名仍需要相应证书，但不阻塞 Tauri 更新包的独立签名验证。

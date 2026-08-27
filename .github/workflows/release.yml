@@ -67,7 +67,7 @@ jobs:
         with:
           tagName: v__VERSION__
           releaseName: "Modelay v__VERSION__"
-          releaseBody: "See the assets below to download and install this version. Existing Modelay installations can update from inside the app."
+          releaseBody: "Fresh installations show only the official Codex channel. Add third-party channels with your own API URL, model, paths, and key. Existing Modelay channels remain unchanged during upgrades. Signed in-app updates are supported."
           releaseDraft: false
           prerelease: false
           uploadUpdaterJson: true

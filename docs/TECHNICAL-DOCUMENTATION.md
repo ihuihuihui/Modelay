@@ -14,26 +14,28 @@ Modelay 采用 Tauri 2 桌面壳、React/TypeScript 界面和 Rust 核心。Rust
 
 偏好文件不包含密钥。第三方渠道必须使用 HTTPS，localhost 可使用 HTTP。自定义 Provider 固定使用 Responses API。
 
-首次启动迁移兼容 CodexSwitch 3.x 的 `channels` 偏好结构，也兼容 2.x 的 `aiLink` 对象和独立 `ailink.json`。迁移读取旧 Keychain/环境变量，但不删除旧文件、旧密钥或旧备份。
+公开版首次启动创建空的第三方渠道列表，因此主界面只显示官方 Codex。首次启动不会扫描或导入 CodexSwitch 偏好、旧 `ailink.json`、旧 Keychain 或第三方环境变量；客户必须通过“添加渠道”自行填写 API 地址、模型、接口路径和密钥。升级安装继续读取 Modelay 自己的偏好与系统凭据，因此已有用户的渠道不会被删除或重置。
 
 ## Provider 配置
 
 官方模式移除顶层 `model_provider`。任务覆盖时优先从最近的用户官方任务识别实际 Provider，无法识别时使用 `openai_http`。
 
-AiLink 使用 `custom`，自定义渠道使用 `custom_<安全化渠道 ID>`：
+自定义渠道使用 `custom_<安全化渠道 ID>`：
 
 ```toml
-model_provider = "custom"
+model_provider = "custom_example"
 model = "gpt-5.6-sol"
 
-[model_providers.custom]
-name = "AiLink"
-base_url = "https://ai.ailink1.com"
-env_key = "AILINK_API_KEY"
+[model_providers.custom_example]
+name = "Example Relay"
+base_url = "https://api.example.com"
+env_key = "CODEX_EXAMPLE_API_KEY"
 wire_api = "responses"
 requires_openai_auth = false
 supports_websockets = false
 ```
+
+为兼容已经安装的旧版 Modelay，既有 `ailink` 渠道 ID 仍映射为 `custom` / `AILINK_API_KEY`，但公开版不会主动创建或导入该渠道。
 
 明文 `experimental_bearer_token` 会被移除。TOML 使用 `toml_edit` 修改，因此不会重建整个文件。
 
@@ -75,13 +77,13 @@ Codex 子进程的 stdout/stderr 会在独立线程持续读取，避免输出�
 
 ## 平台适配
 
-macOS 使用 Keychain、`launchctl setenv`、ChatGPT 应用探测和 `open -a ChatGPT`。旧 CodexSwitch 密钥使用禁止认证弹窗的非交互 Keychain 查询迁移，避免启动阻塞。额度胶囊添加 `NSWindowStyleMaskNonactivatingPanel` 和全空间辅助窗口行为。
+macOS 使用 Keychain、`launchctl setenv`、ChatGPT 应用探测和 `open -a ChatGPT`。对于用户已经保存的渠道，状态读取会先检查该渠道自己的启动环境变量，再通过 Security Framework 的非交互查询读取 Modelay 凭据，并跳过需要认证的项目；运行时不启动 `/usr/bin/security`，也不在后台自动复制或更新密钥。Keychain 写入和删除只发生在用户明确保存或删除密钥时。额度胶囊添加 `NSWindowStyleMaskNonactivatingPanel` 和全空间辅助窗口行为。
 
 Windows 使用 Credential Manager、`HKCU\\Environment` 和 `WM_SETTINGCHANGE` 广播环境更新，探测常见安装目录、运行中的 ChatGPT 进程和 Microsoft Store/MSIX 包；重启时优先复用可执行文件，必要时通过 Windows App ID 启动。额度胶囊添加 `WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW`，并通过 `SetWindowPos(..., SWP_FRAMECHANGED)` 立即应用扩展样式。
 
 ## 测试、构建与更新
 
-Rust 单元测试覆盖 TOML 保留、原子覆盖、精确文件快照、Provider/URL、旧版迁移、Doctor、官方/第三方额度、Codex 多额度桶优先级、Provider 动态识别、数据库锁回滚，以及当前/旧版 SQLite 表结构。TypeScript 测试覆盖悬浮窗边缘几何、动态额度周期标签、模型选择和更新错误/进度状态。GitHub Actions 在 Linux 运行这些测试，并在 macOS、Windows 生成应用包；Windows Rust/Win32 源码也使用 `cargo-xwin` 与 Windows CRT/SDK 完成交叉编译检查。
+Rust 单元测试覆盖 TOML 保留、原子覆盖、精确文件快照、Provider/URL、全新安装仅官方渠道、已有 AiLink 渠道升级保留、Doctor、官方/第三方额度、Codex 多额度桶优先级、Provider 动态识别、数据库锁回滚，以及当前/旧版 SQLite 表结构。TypeScript 测试覆盖悬浮窗边缘几何、动态额度周期标签、模型选择和更新错误/进度状态。GitHub Actions 在 Linux 运行这些测试，并在 macOS、Windows 生成应用包；Windows Rust/Win32 源码也使用 `cargo-xwin` 与 Windows CRT/SDK 完成交叉编译检查。
 
 当前自动验证基线为 Rust 23 项单元测试和 TypeScript 13 项悬浮窗/额度标签/模型选择/更新状态测试全部通过；Rust Clippy 全目标零警告、TypeScript 类型检查、Vite 生产构建、npm 生产依赖高危漏洞检查及 `x86_64-pc-windows-msvc` 交叉检查通过。Windows 交叉检查验证 Rust/Win32 源码，Windows runner 已成功生成 `v4.0.0-alpha.3` NSIS 安装器；运行行为仍需 Windows 实机验收。
 

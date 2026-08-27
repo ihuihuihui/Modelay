@@ -97,7 +97,6 @@ pub fn run() {
                     window.show()?;
                 }
             }
-            std::thread::spawn(storage::migrate_secrets_nonblocking);
             Ok(())
         })
         .build(tauri::generate_context!())

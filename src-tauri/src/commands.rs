@@ -135,7 +135,7 @@ fn save_channel_inner(request: SaveChannelRequest) -> Result<AppState> {
             "渠道 ID 只能由字母、数字、连字符和下划线组成，并且必须以字母或数字开头。".into(),
         );
     }
-    channel.is_built_in = channel.id == "ailink";
+    channel.is_built_in = false;
     channel.has_secret = None;
     let active_config = config::read()?;
     let is_active = config::active_provider(&active_config.document) == channel.provider_id();
@@ -236,7 +236,7 @@ pub async fn delete_channel(channel_id: String) -> std::result::Result<AppState,
             .cloned()
             .ok_or_else(|| ModelayError::Message("找不到该渠道。".into()))?;
         if channel.is_built_in {
-            return Err("内置 AiLink 渠道不能删除。".into());
+            return Err("内置渠道不能删除。".into());
         }
         let active = config::read()?;
         if config::active_provider(&active.document) == channel.provider_id() {
@@ -247,7 +247,7 @@ pub async fn delete_channel(channel_id: String) -> std::result::Result<AppState,
         let previous_secret = secrets::stored(&channel)?;
         preferences.channels.retain(|item| item.id != channel_id);
         if preferences.last_channel_id.as_deref() == Some(channel_id.as_str()) {
-            preferences.last_channel_id = Some("ailink".into());
+            preferences.last_channel_id = preferences.channels.first().map(|item| item.id.clone());
         }
         storage::save_preferences(&preferences)?;
         if let Err(error) = platform::set_user_environment(&environment_key, None) {

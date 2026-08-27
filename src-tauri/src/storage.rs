@@ -1,6 +1,6 @@
 use crate::error::Result;
-use crate::models::{ChannelProfile, Preferences};
-use crate::{paths, platform, secrets};
+use crate::models::Preferences;
+use crate::paths;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -24,128 +24,20 @@ pub fn initialize() -> Result<Preferences> {
     fs::create_dir_all(paths::support_dir()?)?;
     fs::create_dir_all(paths::backup_dir()?)?;
     let preferences_path = paths::preferences_path()?;
-    let first_launch = !preferences_path.exists();
-    let mut preferences = if !first_launch {
+    let mut preferences = if preferences_path.exists() {
         serde_json::from_slice::<Preferences>(&fs::read(&preferences_path)?)?
     } else {
-        migrate_legacy_preferences()?.unwrap_or_default()
+        Preferences::default()
     };
     normalize(&mut preferences);
     save_preferences(&preferences)?;
-    migrate_image_routing()?;
     Ok(preferences)
 }
 
-pub fn migrate_secrets_nonblocking() {
-    let Ok(preferences) = load_preferences() else {
-        return;
-    };
-    for channel in &preferences.channels {
-        let key = channel.environment_key();
-        if let Ok(Some(secret)) = platform::get_user_environment(&key) {
-            let _ = secrets::set(channel, &secret);
-        } else {
-            let _ = secrets::migrate_legacy_noninteractive(channel);
-        }
-    }
-}
-
-fn migrate_legacy_preferences() -> Result<Option<Preferences>> {
-    let directory = paths::legacy_support_dir()?;
-    let preferences_path = directory.join("preferences.json");
-    let settings_path = directory.join("ailink.json");
-    let preferences_value = preferences_path
-        .exists()
-        .then(|| fs::read(&preferences_path))
-        .transpose()?
-        .map(|data| serde_json::from_slice::<serde_json::Value>(&data))
-        .transpose()?;
-    let settings_value = settings_path
-        .exists()
-        .then(|| fs::read(&settings_path))
-        .transpose()?
-        .map(|data| serde_json::from_slice::<serde_json::Value>(&data))
-        .transpose()?;
-    let Some(mut preferences) = parse_legacy_preferences(preferences_value, settings_value)? else {
-        return Ok(None);
-    };
-    normalize(&mut preferences);
-    Ok(Some(preferences))
-}
-
-fn parse_legacy_preferences(
-    preferences: Option<serde_json::Value>,
-    settings: Option<serde_json::Value>,
-) -> Result<Option<Preferences>> {
-    if let Some(value) = preferences.as_ref() {
-        if value
-            .get("channels")
-            .and_then(serde_json::Value::as_array)
-            .is_some()
-        {
-            return Ok(Some(serde_json::from_value(value.clone())?));
-        }
-    }
-    let source = preferences
-        .as_ref()
-        .and_then(|value| value.get("aiLink"))
-        .or(settings.as_ref());
-    let Some(source) = source else {
-        return Ok(preferences.map(serde_json::from_value).transpose()?);
-    };
-    let mut channel = ChannelProfile::ailink();
-    if let Some(base_url) = source
-        .get("baseURL")
-        .and_then(serde_json::Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-    {
-        channel.base_url = base_url.to_owned();
-    }
-    if let Some(model) = source
-        .get("model")
-        .and_then(serde_json::Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-    {
-        channel.model = model.to_owned();
-    }
-    let official_model = preferences
-        .as_ref()
-        .and_then(|value| value.get("officialModel"))
-        .and_then(serde_json::Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or("gpt-5.6-sol")
-        .to_owned();
-    Ok(Some(Preferences {
-        channels: vec![channel],
-        official_model,
-        last_channel_id: Some("ailink".into()),
-        ..Preferences::default()
-    }))
-}
-
-fn migrate_image_routing() -> Result<()> {
-    let target = paths::image_routing_path()?;
-    if target.exists() {
-        return Ok(());
-    }
-    let legacy = paths::legacy_support_dir()?.join("image-generation-routing.json");
-    if legacy.exists() {
-        fs::copy(legacy, target)?;
-    }
-    Ok(())
-}
-
 fn normalize(preferences: &mut Preferences) {
-    if !preferences
-        .channels
-        .iter()
-        .any(|channel| channel.id == "ailink")
-    {
-        preferences.channels.insert(0, ChannelProfile::ailink());
-    }
     for channel in &mut preferences.channels {
         channel.has_secret = None;
-        channel.is_built_in = channel.id == "ailink";
+        channel.is_built_in = false;
     }
     let mut seen = std::collections::HashSet::new();
     preferences
@@ -153,6 +45,13 @@ fn normalize(preferences: &mut Preferences) {
         .retain(|channel| seen.insert(channel.id.clone()));
     if preferences.official_model.trim().is_empty() {
         preferences.official_model = "gpt-5.6-sol".into();
+    }
+    if preferences
+        .last_channel_id
+        .as_ref()
+        .is_some_and(|id| !preferences.channels.iter().any(|channel| &channel.id == id))
+    {
+        preferences.last_channel_id = None;
     }
     if !matches!(preferences.dock_mode.as_str(), "free" | "edge" | "off") {
         preferences.dock_mode = "free".into();
@@ -225,6 +124,7 @@ fn snapshot_file(path: &Path) -> Result<FileSnapshot> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::ChannelProfile;
 
     #[test]
     fn atomic_write_replaces_an_existing_file() {
@@ -253,42 +153,24 @@ mod tests {
     }
 
     #[test]
-    fn migrates_current_channel_preferences() {
-        let value = serde_json::json!({
-            "channels": [{
-                "id": "proxy-one", "name": "Proxy", "baseURL": "https://proxy.example",
-                "model": "gpt-test", "modelsPath": "/v1/models", "usagePath": "",
-                "validatesModelList": false, "isBuiltIn": false, "wireAPI": "responses"
-            }],
-            "officialModel": "gpt-official", "lastChannelID": "proxy-one"
-        });
-        let result = parse_legacy_preferences(Some(value), None)
-            .unwrap()
-            .unwrap();
-        assert_eq!(result.channels[0].id, "proxy-one");
-        assert_eq!(result.official_model, "gpt-official");
+    fn default_preferences_start_with_official_only() {
+        let preferences = Preferences::default();
+        assert!(preferences.channels.is_empty());
+        assert!(preferences.last_channel_id.is_none());
     }
 
     #[test]
-    fn migrates_v2_ailink_preferences_and_settings_file() {
-        let old_preferences = serde_json::json!({
-            "aiLink": {"baseURL": "https://old.example/v1", "model": "old-model"},
-            "officialModel": "official-model"
-        });
-        let result = parse_legacy_preferences(Some(old_preferences), None)
-            .unwrap()
-            .unwrap();
-        assert_eq!(result.channels[0].base_url, "https://old.example/v1");
-        assert_eq!(result.channels[0].model, "old-model");
-        assert_eq!(result.official_model, "official-model");
-
-        let settings =
-            serde_json::json!({"baseURL": "https://settings.example", "model": "settings-model"});
-        let result = parse_legacy_preferences(None, Some(settings))
-            .unwrap()
-            .unwrap();
-        assert_eq!(result.channels[0].base_url, "https://settings.example");
-        assert_eq!(result.channels[0].model, "settings-model");
+    fn normalization_preserves_existing_ailink_as_a_user_channel() {
+        let mut preferences = Preferences {
+            channels: vec![ChannelProfile::ailink()],
+            last_channel_id: Some("ailink".into()),
+            ..Preferences::default()
+        };
+        normalize(&mut preferences);
+        assert_eq!(preferences.channels.len(), 1);
+        assert_eq!(preferences.channels[0].id, "ailink");
+        assert!(!preferences.channels[0].is_built_in);
+        assert_eq!(preferences.last_channel_id.as_deref(), Some("ailink"));
     }
 
     #[test]
@@ -311,8 +193,9 @@ mod tests {
         };
         normalize(&mut preferences);
         assert_eq!(preferences.channels.len(), 2);
-        assert!(preferences.channels[0].is_built_in);
+        assert!(!preferences.channels[0].is_built_in);
         assert!(!preferences.channels[1].is_built_in);
+        assert!(preferences.last_channel_id.is_none());
         assert_eq!(preferences.dock_mode, "free");
     }
 }

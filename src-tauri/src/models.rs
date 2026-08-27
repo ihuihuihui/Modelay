@@ -31,6 +31,7 @@ fn default_true() -> bool {
 }
 
 impl ChannelProfile {
+    #[cfg(test)]
     pub fn ailink() -> Self {
         Self {
             id: "ailink".into(),
@@ -117,7 +118,7 @@ pub struct Preferences {
 }
 
 fn default_channels() -> Vec<ChannelProfile> {
-    vec![ChannelProfile::ailink()]
+    Vec::new()
 }
 fn default_official_model() -> String {
     "gpt-5.6-sol".into()
@@ -131,7 +132,7 @@ impl Default for Preferences {
         Self {
             channels: default_channels(),
             official_model: default_official_model(),
-            last_channel_id: Some("ailink".into()),
+            last_channel_id: None,
             dock_mode: default_dock_mode(),
             widget_position: None,
         }

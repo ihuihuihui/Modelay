@@ -4,8 +4,6 @@ use crate::models::ChannelProfile;
 use crate::platform;
 
 const SERVICE: &str = "app.modelay.desktop";
-#[cfg(target_os = "macos")]
-const LEGACY_SERVICE: &str = "com.local.CodexSwitch";
 
 fn account(channel: &ChannelProfile) -> String {
     if channel.id == "ailink" {
@@ -61,19 +59,6 @@ pub fn delete(channel: &ChannelProfile) -> Result<()> {
 }
 
 #[cfg(target_os = "macos")]
-pub fn migrate_legacy_noninteractive(channel: &ChannelProfile) -> Result<bool> {
-    if has(channel) {
-        return Ok(false);
-    }
-    if let Some(value) = read_noninteractive(LEGACY_SERVICE, &account(channel)) {
-        set(channel, &value)?;
-        Ok(true)
-    } else {
-        Ok(false)
-    }
-}
-
-#[cfg(target_os = "macos")]
 fn read_noninteractive(service: &str, account: &str) -> Option<String> {
     use security_framework::item::{ItemClass, ItemSearchOptions, SearchResult};
     let mut options = ItemSearchOptions::new();
@@ -93,9 +78,4 @@ fn read_noninteractive(service: &str, account: &str) -> Option<String> {
             })
         })
         .filter(|value| !value.is_empty())
-}
-
-#[cfg(not(target_os = "macos"))]
-pub fn migrate_legacy_noninteractive(_channel: &ChannelProfile) -> Result<bool> {
-    Ok(false)
 }
