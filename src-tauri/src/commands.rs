@@ -458,6 +458,8 @@ fn switch_inner(request: SwitchRequest) -> Result<SwitchReport> {
             "不支持的推理强度 {reasoning_effort}。"
         )));
     }
+    let session_scope = parse_session_scope(&request.session_scope, request.thread_id.as_deref())?;
+    let session_scope_label = session_scope.label();
     let channel = if is_official {
         None
     } else {
@@ -601,9 +603,10 @@ fn switch_inner(request: SwitchRequest) -> Result<SwitchReport> {
             &provider_id,
             model,
             reasoning_effort,
+            &session_scope,
         )? {
             checks.push(CheckResult {
-                title: "全部旧任务".into(),
+                title: session_scope_label.clone(),
                 detail: format!(
                     "已覆盖 {} 个用户任务为 {} / {} / {}",
                     report.changed_count, provider_id, model, reasoning_effort
@@ -617,7 +620,7 @@ fn switch_inner(request: SwitchRequest) -> Result<SwitchReport> {
             });
         } else {
             checks.push(CheckResult {
-                title: "全部旧任务".into(),
+                title: session_scope_label.clone(),
                 detail: "未找到任务索引；新任务仍使用当前渠道".into(),
                 state: CheckState::Warning,
             });
@@ -632,6 +635,7 @@ fn switch_inner(request: SwitchRequest) -> Result<SwitchReport> {
             provider_id,
             model: model.into(),
             reasoning_effort: reasoning_effort.into(),
+            session_scope: request.session_scope.clone(),
             image_skill: image_skill.into(),
             backup_path: backup_path.display().to_string(),
             needs_restart: true,
@@ -871,6 +875,28 @@ fn ensure_reasoning_supported(
     }
 }
 
+fn parse_session_scope(value: &str, thread_id: Option<&str>) -> Result<sessions::RebindScope> {
+    match value {
+        "recent5" => Ok(sessions::RebindScope::Recent(5)),
+        "all" => Ok(sessions::RebindScope::All),
+        "single" => {
+            let thread_id = thread_id.unwrap_or_default().trim();
+            if thread_id.is_empty() {
+                return Err("请输入需要更新的会话 ID。".into());
+            }
+            if thread_id.len() > 128
+                || !thread_id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+            {
+                return Err("会话 ID 格式无效，只能包含字母、数字、连字符和下划线。".into());
+            }
+            Ok(sessions::RebindScope::Single(thread_id.into()))
+        }
+        _ => Err("任务更新范围无效。".into()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -912,6 +938,24 @@ mod tests {
             supported_reasoning_efforts: Vec::new(),
         }];
         assert!(ensure_reasoning_supported(&models, "proxy-model", "high", "Proxy").is_ok());
+    }
+
+    #[test]
+    fn validates_session_rebind_scope_and_thread_id() {
+        assert_eq!(
+            parse_session_scope("recent5", None).unwrap(),
+            sessions::RebindScope::Recent(5)
+        );
+        assert_eq!(
+            parse_session_scope("all", None).unwrap(),
+            sessions::RebindScope::All
+        );
+        assert_eq!(
+            parse_session_scope("single", Some("01a0347b-beff-7c60-ae6b-d6cdf766e863")).unwrap(),
+            sessions::RebindScope::Single("01a0347b-beff-7c60-ae6b-d6cdf766e863".into())
+        );
+        assert!(parse_session_scope("single", Some("bad id")).is_err());
+        assert!(parse_session_scope("single", None).is_err());
     }
 
     #[test]

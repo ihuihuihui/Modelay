@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { availableMonitors, getCurrentWindow, PhysicalPosition } from "@tauri-apps/api/window";
 import { AlertTriangle, Sparkles } from "lucide-react";
 import { quotaLabel } from "./usageFormatting";
-import { calculateEdgeDock, clampWidgetPosition, type WidgetSide } from "./widgetGeometry";
+import { calculateEdgeDock, clampWidgetPosition, interpolateWidgetPosition, type WidgetEasing, type WidgetSide } from "./widgetGeometry";
 
 type DockMode = "free" | "edge" | "off";
 type WidgetState = { currentMode: "official" | "channel" | "unknown"; currentChannelId?: string; currentProviderId: string; dockMode: DockMode };
@@ -19,15 +19,21 @@ export default function UsageWidget() {
   const [mode, setMode] = useState<DockMode>("off");
   const [usage, setUsage] = useState<UsageSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [resetTooltip, setResetTooltip] = useState<string | null>(null);
   const edge = useRef<EdgeState | null>(null);
   const suppressMoveUntil = useRef(0);
   const moveTimer = useRef<number | null>(null);
   const hideTimer = useRef<number | null>(null);
+  const animationToken = useRef(0);
 
   const updateMode = useCallback((nextMode: DockMode) => {
     if (nextMode !== "edge") {
+      const previousEdge = edge.current;
       edge.current = null;
       if (hideTimer.current) window.clearTimeout(hideTimer.current);
+      if (previousEdge && nextMode === "free") {
+        void animatePosition(previousEdge.exposed, 220, "reveal");
+      }
     }
     setMode(nextMode);
   }, []);
@@ -78,9 +84,8 @@ export default function UsageWidget() {
     const exposed = new PhysicalPosition(dock.exposed.x, dock.exposed.y);
     const hidden = new PhysicalPosition(dock.hidden.x, dock.hidden.y);
     edge.current = { side: dock.side, exposed, hidden };
-    suppressMoveUntil.current = Date.now() + 500;
     await invoke("save_widget_position", { x: exposed.x, y: exposed.y });
-    await widget.setPosition(hidden);
+    await animatePosition(hidden, 180, "hide");
   }, [mode]);
 
   useEffect(() => {
@@ -100,8 +105,7 @@ export default function UsageWidget() {
   async function reveal() {
     if (hideTimer.current) window.clearTimeout(hideTimer.current);
     if (!edge.current) return;
-    suppressMoveUntil.current = Date.now() + 500;
-    await widget.setPosition(edge.current.exposed);
+    await animatePosition(edge.current.exposed, 220, "reveal");
   }
 
   function scheduleHide() {
@@ -109,31 +113,55 @@ export default function UsageWidget() {
     if (hideTimer.current) window.clearTimeout(hideTimer.current);
     hideTimer.current = window.setTimeout(async () => {
       if (!edge.current) return;
-      suppressMoveUntil.current = Date.now() + 500;
-      await widget.setPosition(edge.current.hidden);
+      await animatePosition(edge.current.hidden, 180, "hide");
     }, 650);
   }
 
   async function beginDrag() {
-    await reveal();
+    animationToken.current += 1;
+    if (edge.current) {
+      suppressMoveUntil.current = Date.now() + 500;
+      await widget.setPosition(edge.current.exposed);
+    }
     edge.current = null;
     await widget.startDragging();
+  }
+
+  async function animatePosition(target: PhysicalPosition, duration: number, easing: WidgetEasing) {
+    const token = ++animationToken.current;
+    const from = await widget.outerPosition();
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      suppressMoveUntil.current = Date.now() + 350;
+      await widget.setPosition(target);
+      return;
+    }
+    const started = performance.now();
+    suppressMoveUntil.current = Date.now() + duration + 400;
+    while (token === animationToken.current) {
+      const progress = Math.min(1, (performance.now() - started) / duration);
+      const point = interpolateWidgetPosition(from, target, progress, easing);
+      await widget.setPosition(new PhysicalPosition(point.x, point.y));
+      if (progress >= 1) break;
+      await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+    }
   }
 
   return <div className={`usage-widget ${error ? "has-error" : ""}`} onPointerDown={() => void beginDrag()} onPointerEnter={() => void reveal()} onPointerLeave={scheduleHide} role="status" aria-live="polite">
     <span className="widget-logo"><Sparkles size={12} /></span>
     {usage?.kind === "official" ? <>
-      <Metric label={quotaLabel(usage.fiveHour, "short", true)} value={percent(usage.fiveHour)} reset={usage.fiveHour?.resetsAt} />
+      <Metric label={quotaLabel(usage.fiveHour, "short", true)} value={percent(usage.fiveHour)} reset={usage.fiveHour?.resetsAt} onTooltip={setResetTooltip} />
       <span className="widget-divider" />
-      <Metric label={quotaLabel(usage.weekly, "weekly", true)} value={percent(usage.weekly)} reset={usage.weekly?.resetsAt} />
+      <Metric label={quotaLabel(usage.weekly, "weekly", true)} value={percent(usage.weekly)} reset={usage.weekly?.resetsAt} onTooltip={setResetTooltip} />
     </> : usage ? <div className="widget-balance" title={usage.balanceLabel ?? "可用余额"}><small>{usage.balanceLabel ?? "余额"}</small><b>{formatBalance(usage.remainingBalance)}</b></div> : <div className="widget-loading" title={error ?? "正在读取额度"}>{error ? compactError(error) : "正在读取"}</div>}
     {error && <span className="widget-error" title={error}><AlertTriangle size={11} /></span>}
+    {resetTooltip && <span className="widget-reset-tooltip">{resetTooltip}</span>}
   </div>;
 }
 
-function Metric({ label, value, reset }: { label: string; value: string; reset?: number }) {
-  const title = reset ? `${label}额度重置时间：${new Date(reset * 1000).toLocaleString()}` : `${label}额度重置时间未知`;
-  return <span className="widget-metric" title={title}><small>{label}</small><b>{value}</b></span>;
+function Metric({ label, value, reset, onTooltip }: { label: string; value: string; reset?: number; onTooltip: (value: string | null) => void }) {
+  const resetText = reset ? new Date(reset * 1000).toLocaleString("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : "未知";
+  const title = `${label}额度重置时间：${resetText}`;
+  return <span className="widget-metric" title={title} aria-label={title} onPointerEnter={() => onTooltip(`${label}重置 · ${resetText}`)} onPointerLeave={() => onTooltip(null)}><small>{label}</small><b>{value}</b></span>;
 }
 
 function percent(value?: UsageWindow) { return value ? `${Math.round(value.remainingPercent)}%` : "—"; }

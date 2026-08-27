@@ -9,6 +9,24 @@ export type EdgeDock = {
   hidden: WidgetPoint;
 };
 
+export type WidgetEasing = "reveal" | "hide";
+
+export function interpolateWidgetPosition(
+  from: WidgetPoint,
+  to: WidgetPoint,
+  progress: number,
+  easing: WidgetEasing,
+): WidgetPoint {
+  const bounded = clamp(progress, 0, 1);
+  const eased = easing === "reveal"
+    ? 1 - Math.pow(1 - bounded, 3)
+    : Math.pow(bounded, 3);
+  return {
+    x: Math.round(from.x + (to.x - from.x) * eased),
+    y: Math.round(from.y + (to.y - from.y) * eased),
+  };
+}
+
 export function clampWidgetPosition(
   position: WidgetPoint,
   size: WidgetSize,

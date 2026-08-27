@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { calculateEdgeDock, clampWidgetPosition } from "../src/widgetGeometry.ts";
+import { calculateEdgeDock, clampWidgetPosition, interpolateWidgetPosition } from "../src/widgetGeometry.ts";
 
 const area = { position: { x: 0, y: 20 }, size: { width: 1440, height: 880 } };
 const size = { width: 210, height: 42 };
@@ -37,4 +37,10 @@ test("recovers a persisted widget position after a monitor is removed", () => {
     x: 1230,
     y: 20,
   });
+});
+
+test("uses eased positions for edge reveal and hide motion", () => {
+  assert.deepEqual(interpolateWidgetPosition({ x: 0, y: 0 }, { x: 100, y: 0 }, 0.5, "reveal"), { x: 88, y: 0 });
+  assert.deepEqual(interpolateWidgetPosition({ x: 0, y: 0 }, { x: 100, y: 0 }, 0.5, "hide"), { x: 13, y: 0 });
+  assert.deepEqual(interpolateWidgetPosition({ x: 0, y: 0 }, { x: 100, y: 0 }, 2, "reveal"), { x: 100, y: 0 });
 });

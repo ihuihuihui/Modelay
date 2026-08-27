@@ -6,6 +6,7 @@ import "./styles.css";
 
 const isUsageWindow = new URLSearchParams(window.location.search).get("window") === "usage";
 document.body.classList.toggle("widget-body", isUsageWindow);
+document.documentElement.classList.toggle("widget-html", isUsageWindow);
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>{isUsageWindow ? <UsageWidget /> : <App />}</StrictMode>,

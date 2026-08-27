@@ -176,6 +176,14 @@ pub struct SwitchRequest {
     pub channel_id: String,
     pub model: String,
     pub reasoning_effort: String,
+    #[serde(default = "default_session_scope")]
+    pub session_scope: String,
+    #[serde(default)]
+    pub thread_id: Option<String>,
+}
+
+fn default_session_scope() -> String {
+    "recent5".into()
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -200,6 +208,7 @@ pub struct SwitchReport {
     pub provider_id: String,
     pub model: String,
     pub reasoning_effort: String,
+    pub session_scope: String,
     pub image_skill: String,
     pub backup_path: String,
     pub needs_restart: bool,

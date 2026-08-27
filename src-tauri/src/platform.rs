@@ -229,12 +229,42 @@ pub fn set_user_environment(_key: &str, _value: Option<&str>) -> Result<()> {
 
 #[cfg(target_os = "macos")]
 pub fn restart_chatgpt(environment: &[(String, Option<String>)]) -> Result<()> {
-    let _ = Command::new("/usr/bin/pkill")
+    // LaunchServices (`open -a`) does not reliably propagate provider
+    // environment variables. Terminate the full process tree, then launch
+    // ChatGPT's executable directly so the selected channel reaches Codex.
+    let roots = Command::new("/usr/bin/pgrep")
         .args(["-x", "ChatGPT"])
-        .status();
+        .output()
+        .ok()
+        .map(|output| {
+            String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .filter_map(|line| line.trim().parse::<i32>().ok())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    for root in roots {
+        let mut descendants = Vec::new();
+        collect_descendants(root, &mut descendants);
+        descendants.reverse();
+        for pid in descendants.into_iter().chain(std::iter::once(root)) {
+            let _ = Command::new("/bin/kill")
+                .args(["-TERM", &pid.to_string()])
+                .status();
+        }
+    }
     std::thread::sleep(std::time::Duration::from_millis(1200));
-    let mut command = Command::new("/usr/bin/open");
-    command.args(["-a", "ChatGPT"]);
+    let mut candidates = vec![std::path::PathBuf::from(
+        "/Applications/ChatGPT.app/Contents/MacOS/ChatGPT",
+    )];
+    if let Some(home) = dirs::home_dir() {
+        candidates.push(home.join("Applications/ChatGPT.app/Contents/MacOS/ChatGPT"));
+    }
+    let executable = candidates
+        .iter()
+        .find(|path| path.is_file())
+    .ok_or_else(|| ModelayError::Message("找不到 ChatGPT 应用程序。".into()))?;
+    let mut command = Command::new(executable);
     clear_provider_environment(&mut command);
     for (key, value) in environment {
         command.env_remove(key);
@@ -247,6 +277,24 @@ pub fn restart_chatgpt(environment: &[(String, Option<String>)]) -> Result<()> {
         Ok(())
     } else {
         Err("无法重新打开 ChatGPT。".into())
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn collect_descendants(parent: i32, result: &mut Vec<i32>) {
+    let output = match Command::new("/usr/bin/pgrep")
+        .args(["-P", &parent.to_string()])
+        .output()
+    {
+        Ok(output) => output,
+        Err(_) => return,
+    };
+    for child in String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| line.trim().parse::<i32>().ok())
+    {
+        collect_descendants(child, result);
+        result.push(child);
     }
 }
 

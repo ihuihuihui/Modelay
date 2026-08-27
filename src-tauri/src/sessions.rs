@@ -1,7 +1,7 @@
 use crate::error::{ModelayError, Result};
 use crate::paths;
 use chrono::Local;
-use rusqlite::{backup::Backup, params, Connection, TransactionBehavior};
+use rusqlite::{backup::Backup, named_params, Connection, TransactionBehavior};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -10,6 +10,23 @@ use std::time::Duration;
 pub struct RebindReport {
     pub changed_count: usize,
     pub backup_path: PathBuf,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RebindScope {
+    Recent(usize),
+    All,
+    Single(String),
+}
+
+impl RebindScope {
+    pub fn label(&self) -> String {
+        match self {
+            Self::Recent(limit) => format!("最近活动的 {limit} 个任务"),
+            Self::All => "全部旧任务".into(),
+            Self::Single(thread_id) => format!("指定任务 {thread_id}"),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -55,12 +72,14 @@ pub fn rebind_prepared(
     provider: &str,
     model: &str,
     reasoning_effort: &str,
+    scope: &RebindScope,
 ) -> Result<Option<RebindReport>> {
     rebind_prepared_with_timeout(
         backup,
         provider,
         model,
         reasoning_effort,
+        scope,
         Duration::from_secs(10),
     )
 }
@@ -72,6 +91,7 @@ fn rebind_at_with_timeout(
     provider: &str,
     model: &str,
     reasoning_effort: &str,
+    scope: &RebindScope,
     busy_timeout: Duration,
 ) -> Result<Option<RebindReport>> {
     let backup = backup_at(database_path, backup_directory)?;
@@ -80,6 +100,7 @@ fn rebind_at_with_timeout(
         provider,
         model,
         reasoning_effort,
+        scope,
         busy_timeout,
     )
 }
@@ -110,6 +131,7 @@ fn rebind_prepared_with_timeout(
     provider: &str,
     model: &str,
     reasoning_effort: &str,
+    scope: &RebindScope,
     busy_timeout: Duration,
 ) -> Result<Option<RebindReport>> {
     let Some(backup) = backup else {
@@ -120,30 +142,82 @@ fn rebind_prepared_with_timeout(
     validate_schema(&connection)?;
     let has_thread_source = has_column(&connection, "threads", "thread_source")?;
     let has_reasoning_effort = has_column(&connection, "threads", "reasoning_effort")?;
+    let ordering = if has_column(&connection, "threads", "updated_at_ms")? {
+        "updated_at_ms"
+    } else if has_column(&connection, "threads", "updated_at")? {
+        "updated_at * 1000"
+    } else {
+        "rowid"
+    };
     let selector = if has_thread_source {
         "thread_source = 'user' AND COALESCE(preview, '') <> '' AND COALESCE(model, '') NOT LIKE '%auto-review%' AND COALESCE(source, '') NOT LIKE '%subagent%'"
     } else {
         "preview <> '' AND COALESCE(model, '') NOT LIKE '%auto-review%' AND COALESCE(source, '') NOT LIKE '%subagent%'"
     };
+    let candidates = format!(
+        "(model_provider LIKE 'openai%' OR model_provider='custom' OR model_provider LIKE 'custom_%') AND {selector}"
+    );
+    let scoped_selector = match scope {
+        RebindScope::All => candidates.clone(),
+        RebindScope::Recent(limit) => {
+            if *limit == 0 || *limit > 100 {
+                return Err("最近任务数量必须在 1 到 100 之间。".into());
+            }
+            format!(
+                "id IN (SELECT id FROM threads WHERE {candidates} ORDER BY {ordering} DESC LIMIT {limit})"
+            )
+        }
+        RebindScope::Single(_) => format!("id=:thread_id AND {candidates}"),
+    };
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let (changed_count, remaining) = if has_reasoning_effort {
-        let sql = format!("UPDATE threads SET model_provider=?1, model=?2, reasoning_effort=?3 WHERE (model_provider LIKE 'openai%' OR model_provider='custom' OR model_provider LIKE 'custom_%') AND {selector}");
-        let changed_count =
-            transaction.execute(&sql, params![provider, model, reasoning_effort])?;
-        let verify_sql = format!("SELECT COUNT(*) FROM threads WHERE (model_provider LIKE 'openai%' OR model_provider='custom' OR model_provider LIKE 'custom_%') AND {selector} AND (model_provider<>?1 OR model<>?2 OR COALESCE(reasoning_effort,'')<>?3)");
-        let remaining = transaction.query_row(
-            &verify_sql,
-            params![provider, model, reasoning_effort],
-            |row| row.get::<_, i64>(0),
-        )?;
+        let sql = format!("UPDATE threads SET model_provider=:provider, model=:model, reasoning_effort=:effort WHERE {scoped_selector}");
+        let verify_sql = format!("SELECT COUNT(*) FROM threads WHERE {scoped_selector} AND (model_provider<>:provider OR model<>:model OR COALESCE(reasoning_effort,'')<>:effort)");
+        let (changed_count, remaining) = match scope {
+            RebindScope::Single(thread_id) => {
+                let values = named_params! {":provider": provider, ":model": model, ":effort": reasoning_effort, ":thread_id": thread_id};
+                let changed = transaction.execute(&sql, values)?;
+                let remaining =
+                    transaction.query_row(&verify_sql, values, |row| row.get::<_, i64>(0))?;
+                (changed, remaining)
+            }
+            _ => {
+                let values = named_params! {":provider": provider, ":model": model, ":effort": reasoning_effort};
+                let changed = transaction.execute(&sql, values)?;
+                let remaining =
+                    transaction.query_row(&verify_sql, values, |row| row.get::<_, i64>(0))?;
+                (changed, remaining)
+            }
+        };
+        if matches!(scope, RebindScope::Single(_)) && changed_count == 0 {
+            return Err("指定的会话 ID 不存在，或该任务不是可覆盖的用户任务。".into());
+        }
         (changed_count, remaining)
     } else {
-        let sql = format!("UPDATE threads SET model_provider=?1, model=?2 WHERE (model_provider LIKE 'openai%' OR model_provider='custom' OR model_provider LIKE 'custom_%') AND {selector}");
-        let changed_count = transaction.execute(&sql, params![provider, model])?;
-        let verify_sql = format!("SELECT COUNT(*) FROM threads WHERE (model_provider LIKE 'openai%' OR model_provider='custom' OR model_provider LIKE 'custom_%') AND {selector} AND (model_provider<>?1 OR model<>?2)");
-        let remaining = transaction.query_row(&verify_sql, params![provider, model], |row| {
-            row.get::<_, i64>(0)
-        })?;
+        let sql = format!(
+            "UPDATE threads SET model_provider=:provider, model=:model WHERE {scoped_selector}"
+        );
+        let verify_sql = format!("SELECT COUNT(*) FROM threads WHERE {scoped_selector} AND (model_provider<>:provider OR model<>:model)");
+        let (changed_count, remaining) = match scope {
+            RebindScope::Single(thread_id) => {
+                let values =
+                    named_params! {":provider": provider, ":model": model, ":thread_id": thread_id};
+                let changed = transaction.execute(&sql, values)?;
+                let remaining =
+                    transaction.query_row(&verify_sql, values, |row| row.get::<_, i64>(0))?;
+                (changed, remaining)
+            }
+            _ => {
+                let values = named_params! {":provider": provider, ":model": model};
+                let changed = transaction.execute(&sql, values)?;
+                let remaining =
+                    transaction.query_row(&verify_sql, values, |row| row.get::<_, i64>(0))?;
+                (changed, remaining)
+            }
+        };
+        if matches!(scope, RebindScope::Single(_)) && changed_count == 0 {
+            return Err("指定的会话 ID 不存在，或该任务不是可覆盖的用户任务。".into());
+        }
         (changed_count, remaining)
     };
     if remaining != 0 {
@@ -159,7 +233,7 @@ fn rebind_prepared_with_timeout(
 }
 
 fn validate_schema(connection: &Connection) -> Result<()> {
-    for column in ["model_provider", "model", "preview", "source"] {
+    for column in ["id", "model_provider", "model", "preview", "source"] {
         if !has_column(connection, "threads", column)? {
             return Err(ModelayError::Message(format!(
                 "当前 Codex 任务数据库缺少 {column} 字段，已停止修改。"
@@ -189,6 +263,7 @@ mod tests {
         provider: &str,
         model: &str,
         reasoning_effort: &str,
+        scope: &RebindScope,
     ) -> Result<Option<RebindReport>> {
         let backup = backup_at(database_path, backup_directory)?;
         rebind_prepared_with_timeout(
@@ -196,6 +271,7 @@ mod tests {
             provider,
             model,
             reasoning_effort,
+            scope,
             Duration::from_secs(10),
         )
     }
@@ -213,6 +289,7 @@ mod tests {
             "custom",
             "gpt-5.6-sol",
             "medium",
+            &RebindScope::All,
         )
         .unwrap()
         .unwrap();
@@ -289,9 +366,16 @@ mod tests {
         let connection = Connection::open(&database).unwrap();
         connection.execute_batch("CREATE TABLE threads(id TEXT PRIMARY KEY, model_provider TEXT NOT NULL, model TEXT, preview TEXT NOT NULL, source TEXT NOT NULL, updated_at INTEGER); INSERT INTO threads VALUES ('user','custom','old','visible','vscode',1),('hidden','openai_http','old','','vscode',2),('review','openai_http','codex-auto-review','visible','subagent',3);").unwrap();
         drop(connection);
-        let report = rebind_at(&database, directory.path(), "openai_http", "gpt-5.5", "low")
-            .unwrap()
-            .unwrap();
+        let report = rebind_at(
+            &database,
+            directory.path(),
+            "openai_http",
+            "gpt-5.5",
+            "low",
+            &RebindScope::All,
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(report.changed_count, 1);
         let connection = Connection::open(database).unwrap();
         assert_eq!(
@@ -320,6 +404,100 @@ mod tests {
     }
 
     #[test]
+    fn rebinds_only_the_five_most_recent_user_threads() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = directory.path().join("state.sqlite");
+        let connection = Connection::open(&database).unwrap();
+        connection.execute_batch("CREATE TABLE threads(id TEXT PRIMARY KEY, model_provider TEXT NOT NULL, model TEXT, reasoning_effort TEXT, preview TEXT NOT NULL, source TEXT NOT NULL, thread_source TEXT, updated_at_ms INTEGER); INSERT INTO threads VALUES ('u1','openai_http','old','high','visible','vscode','user',1000),('u2','openai_http','old','high','visible','vscode','user',2000),('u3','openai_http','old','high','visible','vscode','user',3000),('u4','openai_http','old','high','visible','vscode','user',4000),('u5','openai_http','old','high','visible','vscode','user',5000),('u6','openai_http','old','high','visible','vscode','user',6000),('review','openai_http','codex-auto-review','high','visible','subagent','subagent',7000);").unwrap();
+        drop(connection);
+        let report = rebind_at(
+            &database,
+            directory.path(),
+            "custom",
+            "new-model",
+            "medium",
+            &RebindScope::Recent(5),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(report.changed_count, 5);
+        let connection = Connection::open(database).unwrap();
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT model_provider FROM threads WHERE id='u1'",
+                    [],
+                    |row| row.get::<_, String>(0)
+                )
+                .unwrap(),
+            "openai_http"
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT model_provider FROM threads WHERE id='u6'",
+                    [],
+                    |row| row.get::<_, String>(0)
+                )
+                .unwrap(),
+            "custom"
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT model_provider FROM threads WHERE id='review'",
+                    [],
+                    |row| row.get::<_, String>(0)
+                )
+                .unwrap(),
+            "openai_http"
+        );
+    }
+
+    #[test]
+    fn rebinds_one_requested_user_thread_and_rejects_unknown_ids() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = directory.path().join("state.sqlite");
+        let connection = Connection::open(&database).unwrap();
+        connection.execute_batch("CREATE TABLE threads(id TEXT PRIMARY KEY, model_provider TEXT NOT NULL, model TEXT, reasoning_effort TEXT, preview TEXT NOT NULL, source TEXT NOT NULL, thread_source TEXT, updated_at_ms INTEGER); INSERT INTO threads VALUES ('target-id','openai_http','old','high','visible','vscode','user',1000),('other-id','custom','old','high','visible','vscode','user',2000);").unwrap();
+        drop(connection);
+        let report = rebind_at(
+            &database,
+            directory.path(),
+            "custom_proxy",
+            "new-model",
+            "low",
+            &RebindScope::Single("target-id".into()),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(report.changed_count, 1);
+        let connection = Connection::open(&database).unwrap();
+        assert_eq!(connection.query_row("SELECT model_provider || ':' || reasoning_effort FROM threads WHERE id='target-id'", [], |row| row.get::<_, String>(0)).unwrap(), "custom_proxy:low");
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT model_provider FROM threads WHERE id='other-id'",
+                    [],
+                    |row| row.get::<_, String>(0)
+                )
+                .unwrap(),
+            "custom"
+        );
+        drop(connection);
+        let error = rebind_at(
+            &database,
+            directory.path(),
+            "custom_proxy",
+            "new-model",
+            "low",
+            &RebindScope::Single("missing-id".into()),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("不存在"));
+    }
+
+    #[test]
     fn database_lock_leaves_threads_unchanged() {
         let directory = tempfile::tempdir().unwrap();
         let database = directory.path().join("state.sqlite");
@@ -332,6 +510,7 @@ mod tests {
             "custom",
             "gpt-5.6-sol",
             "medium",
+            &RebindScope::All,
             Duration::from_millis(30),
         );
         assert!(result.is_err());
