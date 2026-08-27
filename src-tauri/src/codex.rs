@@ -262,7 +262,7 @@ pub fn rpc(method: &str, params: Value, timeout: Duration) -> Result<Value> {
         }
     });
     let requests = [
-        json!({"id":1,"method":"initialize","params":{"clientInfo":{"name":"modelay","title":"Modelay","version":"4.0.0-alpha.1"},"capabilities":null}}),
+        json!({"id":1,"method":"initialize","params":{"clientInfo":{"name":"modelay","title":"Modelay","version":env!("CARGO_PKG_VERSION")},"capabilities":null}}),
         json!({"method":"initialized"}),
         json!({"id":2,"method":method,"params":params}),
     ];

@@ -1,7 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
-import { AlertTriangle, Check, ChevronRight, CircleHelp, Cloud, Copy, Database, FolderOpen, KeyRound, LogIn, Pencil, Plus, RefreshCw, Settings2, ShieldCheck, Sparkles, Trash2, Wifi, X } from "lucide-react";
+import { relaunch } from "@tauri-apps/plugin-process";
+import { check, type DownloadEvent, type Update } from "@tauri-apps/plugin-updater";
+import { AlertTriangle, Check, ChevronRight, CircleHelp, Cloud, Copy, Database, Download, FolderOpen, KeyRound, LogIn, Pencil, Plus, RefreshCw, Settings2, ShieldCheck, Sparkles, Trash2, Wifi, X } from "lucide-react";
 import { resolveManualModelFallback } from "./modelSelection";
+import { classifyUpdaterError, downloadPercent, type UpdatePhase } from "./updateState";
 import { quotaLabel } from "./usageFormatting";
 
 type Channel = {
@@ -44,6 +48,15 @@ function App() {
   const [infoPanel, setInfoPanel] = useState<InfoPanel>(null);
   const [pendingDelete, setPendingDelete] = useState<Channel | null>(null);
   const [confirmSecretDelete, setConfirmSecretDelete] = useState(false);
+  const [appVersion, setAppVersion] = useState("读取中");
+  const [updatePhase, setUpdatePhase] = useState<UpdatePhase>("idle");
+  const [updateMessage, setUpdateMessage] = useState("尚未检查更新");
+  const [updateVersion, setUpdateVersion] = useState<string | null>(null);
+  const [updateNotes, setUpdateNotes] = useState<string | null>(null);
+  const [updateProgress, setUpdateProgress] = useState<number | null>(null);
+  const [updateOpen, setUpdateOpen] = useState(false);
+  const pendingUpdate = useRef<Update | null>(null);
+  const startupUpdateCheck = useRef(false);
 
   const allChannels = useMemo(() => [officialChannel, ...(state?.channels ?? [])], [state]);
   const selected = allChannels.find((channel) => channel.id === selectedId) ?? officialChannel;
@@ -61,6 +74,42 @@ function App() {
   }, []);
 
   useEffect(() => { void loadState(); }, [loadState]);
+
+  const checkForUpdates = useCallback(async (manual = false) => {
+    setUpdatePhase("checking");
+    setUpdateMessage("正在安全检查新版本…");
+    try {
+      const next = await check({ timeout: 15_000 });
+      if (!next) {
+        pendingUpdate.current = null;
+        setUpdateVersion(null);
+        setUpdateNotes(null);
+        setUpdatePhase("latest");
+        setUpdateMessage("当前已是最新版本");
+        if (manual) setMessage("Modelay 当前已是最新版本");
+        return;
+      }
+      pendingUpdate.current = next;
+      setUpdateVersion(next.version);
+      setUpdateNotes(next.body ?? null);
+      setUpdatePhase("available");
+      setUpdateMessage(`发现新版本 ${next.version}`);
+      setUpdateOpen(true);
+    } catch (reason) {
+      const classified = classifyUpdaterError(reason);
+      setUpdatePhase(classified.phase);
+      setUpdateMessage(classified.message);
+      if (manual && classified.phase === "error") setError(classified.message);
+    }
+  }, []);
+
+  useEffect(() => {
+    void getVersion().then(setAppVersion).catch(() => undefined);
+    if (startupUpdateCheck.current) return;
+    startupUpdateCheck.current = true;
+    const timer = window.setTimeout(() => void checkForUpdates(false), 4_000);
+    return () => window.clearTimeout(timer);
+  }, [checkForUpdates]);
 
   const loadModels = useCallback(async (channelId: string, fallbackModel: string, validatesModelList: boolean) => {
     setModelsLoading(true); setModelError(null); setModelNotice(null); setModels([]);
@@ -159,6 +208,39 @@ function App() {
     finally { setBusy(false); }
   }
 
+  async function installUpdate() {
+    const next = pendingUpdate.current;
+    if (!next) return;
+    setUpdatePhase("downloading");
+    setUpdateProgress(0);
+    setUpdateMessage(`正在下载 ${next.version}…`);
+    let downloaded = 0;
+    let total: number | undefined;
+    const onEvent = (event: DownloadEvent) => {
+      if (event.event === "Started") {
+        total = event.data.contentLength;
+        setUpdateProgress(downloadPercent(downloaded, total));
+      } else if (event.event === "Progress") {
+        downloaded += event.data.chunkLength;
+        setUpdateProgress(downloadPercent(downloaded, total));
+      } else {
+        setUpdatePhase("installing");
+        setUpdateProgress(100);
+        setUpdateMessage("下载完成，正在验证签名并安装…");
+      }
+    };
+    try {
+      await next.downloadAndInstall(onEvent, { timeout: 120_000 });
+      setUpdateMessage("更新安装完成，正在重启 Modelay…");
+      await relaunch();
+    } catch (reason) {
+      const classified = classifyUpdaterError(reason);
+      setUpdatePhase(classified.phase);
+      setUpdateMessage(classified.message);
+      setError(classified.message);
+    }
+  }
+
   async function setWidgetMode(mode: AppState["dockMode"]) {
     try {
       const next = await invoke<AppState>("set_widget_mode", { mode });
@@ -178,7 +260,7 @@ function App() {
   return <div className="shell">
     <header className="topbar">
       <div className="brand"><div className="brand-mark"><Sparkles size={18} /></div><div><div className="brand-name">Modelay</div><div className="brand-sub">AI 渠道与额度管理器 · 4.0 Alpha</div></div></div>
-      <div className="top-actions"><span className="platform"><span className={`dot ${state?.configConformant ? "" : "warn"}`} />{state?.platform ?? "读取中"}</span><button className="icon-btn" title="打开备份目录" onClick={() => void invoke("open_backup_folder")}><FolderOpen size={17} /></button><button className="icon-btn" title="帮助" onClick={() => setInfoPanel("help")}><CircleHelp size={17} /></button><button className="icon-btn" title="设置" onClick={() => setInfoPanel("settings")}><Settings2 size={17} /></button></div>
+      <div className="top-actions"><span className="platform"><span className={`dot ${state?.configConformant ? "" : "warn"}`} />{state?.platform ?? "读取中"}</span>{updatePhase === "available" && <button className="update-badge" title={`可更新至 ${updateVersion}`} onClick={() => setUpdateOpen(true)}><Download size={13} />新版本</button>}<button className="icon-btn" title="打开备份目录" onClick={() => void invoke("open_backup_folder")}><FolderOpen size={17} /></button><button className="icon-btn" title="帮助" onClick={() => setInfoPanel("help")}><CircleHelp size={17} /></button><button className="icon-btn" title="设置" onClick={() => setInfoPanel("settings")}><Settings2 size={17} /></button></div>
     </header>
     <main className="content">
       <section className="hero"><div><p className="eyebrow">当前实际渠道</p><h1>{active?.name ?? state?.currentProviderId ?? "正在检测"}</h1><p className="hero-detail">{state ? `${state.currentProviderId} · ${state.currentModel || "未设置模型"}` : "正在读取 ~/.codex/config.toml"} {state && <span className={`status-pill ${state.configConformant ? "" : "warning"}`}><span className={`dot ${state.configConformant ? "" : "warn"}`} />{state.configConformant ? "配置一致" : "配置需修复"}</span>}</p></div><div className="hero-actions"><button className="ghost-btn" onClick={() => void loadState()} disabled={busy}><RefreshCw size={15} />刷新状态</button>{state && !state.officialLoggedIn && selectedId === "official" && <button className="ghost-btn" onClick={loginOfficial} disabled={busy}><LogIn size={15} />登录 OpenAI</button>}<button className="primary-btn" onClick={switchChannel} disabled={!canSwitch}>{busy ? <RefreshCw size={15} className="spin" /> : <Wifi size={15} />}{isCurrent && selectedModel === state?.currentModel ? "重新验证并覆盖" : "切换并覆盖旧任务"}</button></div></section>
@@ -205,13 +287,14 @@ function App() {
 
     {draft && <div className="modal-backdrop"><div className="modal"><div className="modal-head"><div><h2>{state?.channels.some((channel) => channel.id === draft.id) ? `编辑 ${draft.name}` : "添加自定义渠道"}</h2><p>Codex 自定义 Provider 固定使用 Responses API</p></div><button className="icon-btn" onClick={() => setDraft(null)}><X size={18} /></button></div><label>渠道名称<input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></label><label>API 地址<input value={draft.baseUrl} onChange={(event) => setDraft({ ...draft, baseUrl: event.target.value })} placeholder="https://example.com" /></label><label>API 密钥<input type="password" value={draft.secret} onChange={(event) => setDraft({ ...draft, secret: event.target.value })} placeholder={draft.hasSecret ? "留空则保留已保存密钥" : "请输入密钥"} autoComplete="new-password" /></label><div className="form-row"><label>默认模型<input value={draft.model} onChange={(event) => setDraft({ ...draft, model: event.target.value })} /></label><label>协议<input value="Responses" disabled /></label></div><div className="form-row"><label>模型列表路径<input value={draft.modelsPath} onChange={(event) => setDraft({ ...draft, modelsPath: event.target.value })} /></label><label>余额路径<input value={draft.usagePath} onChange={(event) => setDraft({ ...draft, usagePath: event.target.value })} placeholder="留空表示不查询余额" /></label></div><label className="toggle-row"><input type="checkbox" checked={draft.validatesModelList} onChange={(event) => setDraft({ ...draft, validatesModelList: event.target.checked })} />切换前校验服务端模型列表</label><div className="secret-note"><KeyRound size={15} /><span>{draft.hasSecret ? "已有密钥保存在系统凭据库。输入新值会覆盖，留空保持不变。" : "密钥将写入 macOS Keychain 或 Windows Credential Manager，不会返回给界面。"}</span></div><div className="modal-actions">{draft.hasSecret && <button className="danger-btn" onClick={() => setConfirmSecretDelete(true)}>删除密钥</button>}<button className="ghost-btn" onClick={() => setDraft(null)}>取消</button><button className="primary-btn" onClick={() => void saveChannel()} disabled={busy}>保存渠道</button></div></div></div>}
 
-    {infoPanel && <div className="modal-backdrop"><div className="modal info-modal"><div className="modal-head"><div><h2>{infoPanel === "help" ? "Modelay 使用帮助" : "Modelay 设置"}</h2><p>{infoPanel === "help" ? "渠道切换、旧任务覆盖与安全边界" : "当前运行环境与本地数据位置"}</p></div><button className="icon-btn" onClick={() => setInfoPanel(null)}><X size={18} /></button></div>{infoPanel === "help" ? <div className="info-list"><div><strong>切换渠道</strong><span>选择渠道和服务端实际可用模型后，Modelay 会先备份，再写配置、验证服务并覆盖用户任务索引。</span></div><div><strong>继续旧任务</strong><span>只覆盖用户任务的 Provider 和模型，不修改消息、rollout、子代理、自动审查或 Ollama 任务。</span></div><div><strong>生图路由</strong><span>官方渠道使用 $imagegen；AiLink 和自定义渠道使用 $imagegen2。</span></div><div><strong>出现错误</strong><span>切换事务会恢复配置、环境变量、偏好和生图路由；可从备份目录检查原始文件。</span></div></div> : <div className="info-list"><div><strong>当前 Provider</strong><span>{state?.currentProviderId ?? "读取中"} · {state?.currentModel || "未设置模型"}</span></div><div><strong>应用平台</strong><span>{state?.platform ?? "读取中"}</span></div><div><strong>备份目录</strong><span className="path-text">{state?.backupDirectory ?? "读取中"}</span></div><div><strong>安全存储</strong><span>{state?.platform.startsWith("windows") ? "Windows Credential Manager" : "macOS Keychain"}</span></div><button className="ghost-btn info-action" onClick={() => void invoke("open_backup_folder")}><FolderOpen size={15} />打开备份目录</button></div>}</div></div>}
+    {infoPanel && <div className="modal-backdrop"><div className="modal info-modal"><div className="modal-head"><div><h2>{infoPanel === "help" ? "Modelay 使用帮助" : "Modelay 设置"}</h2><p>{infoPanel === "help" ? "渠道切换、旧任务覆盖与安全边界" : "当前运行环境、本地数据与软件更新"}</p></div><button className="icon-btn" onClick={() => setInfoPanel(null)}><X size={18} /></button></div>{infoPanel === "help" ? <div className="info-list"><div><strong>切换渠道</strong><span>选择渠道和服务端实际可用模型后，Modelay 会先备份，再写配置、验证服务并覆盖用户任务索引。</span></div><div><strong>继续旧任务</strong><span>只覆盖用户任务的 Provider 和模型，不修改消息、rollout、子代理、自动审查或 Ollama 任务。</span></div><div><strong>生图路由</strong><span>官方渠道使用 $imagegen；AiLink 和自定义渠道使用 $imagegen2。</span></div><div><strong>软件更新</strong><span>启动后自动检查签名更新，也可以在设置中手动检查；安装前不会打断当前任务。</span></div><div><strong>出现错误</strong><span>切换事务会恢复配置、环境变量、偏好和生图路由；可从备份目录检查原始文件。</span></div></div> : <div className="info-list"><div><strong>当前 Provider</strong><span>{state?.currentProviderId ?? "读取中"} · {state?.currentModel || "未设置模型"}</span></div><div><strong>应用平台</strong><span>{state?.platform ?? "读取中"}</span></div><div><strong>备份目录</strong><span className="path-text">{state?.backupDirectory ?? "读取中"}</span></div><div><strong>安全存储</strong><span>{state?.platform.startsWith("windows") ? "Windows Credential Manager" : "macOS Keychain"}</span></div><div className="update-setting"><strong>软件更新 · {appVersion}</strong><span>{updateMessage}</span>{updatePhase === "downloading" || updatePhase === "installing" ? <div className="update-progress"><i style={{ width: `${updateProgress ?? 12}%` }} /></div> : null}<button className="ghost-btn info-action" onClick={() => void (updatePhase === "available" ? setUpdateOpen(true) : checkForUpdates(true))} disabled={updatePhase === "checking" || updatePhase === "downloading" || updatePhase === "installing"}>{updatePhase === "checking" ? <RefreshCw size={15} className="spin" /> : updatePhase === "available" ? <Download size={15} /> : <RefreshCw size={15} />}{updatePhase === "available" ? `安装 ${updateVersion}` : "检查更新"}</button></div><button className="ghost-btn info-action" onClick={() => void invoke("open_backup_folder")}><FolderOpen size={15} />打开备份目录</button></div>}</div></div>}
 
     {pendingDelete && <div className="modal-backdrop"><div className="modal confirm-modal"><div className="restart-icon danger-icon"><Trash2 size={21} /></div><h2>删除 {pendingDelete.name}？</h2><p>将删除渠道资料、系统凭据和残留环境变量。备份文件不会被删除。</p><div className="modal-actions"><button className="ghost-btn" onClick={() => setPendingDelete(null)}>取消</button><button className="danger-btn" onClick={() => void deleteChannel(pendingDelete)} disabled={busy}>确认删除</button></div></div></div>}
 
     {confirmSecretDelete && draft && <div className="modal-backdrop nested-modal"><div className="modal confirm-modal"><div className="restart-icon danger-icon"><KeyRound size={21} /></div><h2>删除 {draft.name} 的密钥？</h2><p>删除后该渠道将无法查询模型、余额或执行切换，直到重新保存密钥。</p><div className="modal-actions"><button className="ghost-btn" onClick={() => setConfirmSecretDelete(false)}>取消</button><button className="danger-btn" onClick={() => void deleteSecret()} disabled={busy}>确认删除密钥</button></div></div></div>}
 
     {restartOpen && <div className="modal-backdrop"><div className="modal restart-modal"><div className="restart-icon"><RefreshCw size={22} /></div><h2>真实配置已切换</h2><p>配置、诊断和用户任务覆盖已经完成。立即重启会中断 ChatGPT 中仍在运行的任务。</p><div className="modal-actions"><button className="ghost-btn" onClick={() => { setRestartOpen(false); setMessage("配置已生效，请稍后手动重启 ChatGPT"); }}>稍后手动重启</button><button className="primary-btn" onClick={() => void restartNow()}>立即重启</button></div></div></div>}
+    {updateOpen && updateVersion && <div className="modal-backdrop"><div className="modal update-modal"><div className="restart-icon"><Download size={22} /></div><h2>Modelay {updateVersion} 可用</h2><p>当前版本 {appVersion}。更新包会先验证 Modelay 的数字签名，验证失败将拒绝安装。</p>{updateNotes && <div className="release-notes">{updateNotes}</div>}{updatePhase === "downloading" || updatePhase === "installing" ? <div className="modal-update-progress"><div><i style={{ width: `${updateProgress ?? 12}%` }} /></div><span>{updateMessage}{updateProgress !== null ? ` · ${updateProgress}%` : ""}</span></div> : <div className="update-warning"><AlertTriangle size={15} /><span>安装完成后 Modelay 会自动重启，请先结束正在执行的重要操作。</span></div>}<div className="modal-actions"><button className="ghost-btn" onClick={() => setUpdateOpen(false)} disabled={updatePhase === "downloading" || updatePhase === "installing"}>稍后提醒</button><button className="primary-btn" onClick={() => void installUpdate()} disabled={updatePhase === "downloading" || updatePhase === "installing"}>{updatePhase === "downloading" || updatePhase === "installing" ? <RefreshCw size={15} className="spin" /> : <Download size={15} />}立即更新并重启</button></div></div></div>}
   </div>;
 }
 

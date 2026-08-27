@@ -27,7 +27,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform: [macos-latest, windows-latest]
+        include:
+          - platform: macos-latest
+            args: "--bundles app,dmg --config src-tauri/tauri.release.generated.json"
+          - platform: windows-latest
+            args: "--bundles nsis,msi --config src-tauri/tauri.release.generated.json"
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
@@ -37,28 +41,27 @@ jobs:
           cache: npm
       - uses: dtolnay/rust-toolchain@stable
       - run: npm ci
-      - name: Build macOS ZIP and DMG
-        if: runner.os == 'macOS'
-        run: ./scripts/package-macos.sh
-      - name: Build Windows NSIS and MSI
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: ./scripts/package-windows.ps1
-      - uses: actions/upload-artifact@v4
-        with:
-          name: modelay-${{ runner.os }}
-          path: artifacts/installers/*
-          if-no-files-found: error
-
-  publish:
-    needs: bundle
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: release-assets
-          merge-multiple: true
-      - name: Create GitHub Release
+      - name: Require updater signing secrets
+        shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" release-assets/* --generate-notes --title "Modelay $GITHUB_REF_NAME"
+          SIGNING_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          SIGNING_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: test -n "$SIGNING_KEY" && test -n "$SIGNING_PASSWORD"
+      - name: Configure the public update feed
+        env:
+          MODELAY_UPDATE_ENDPOINT: https://github.com/${{ github.repository }}/releases/latest/download/latest.json
+        run: npm run prepare:update-config
+      - uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: v__VERSION__
+          releaseName: "Modelay v__VERSION__"
+          releaseBody: "See the assets below to download and install this version. Existing Modelay installations can update from inside the app."
+          releaseDraft: false
+          prerelease: false
+          uploadUpdaterJson: true
+          updaterJsonPreferNsis: true
+          args: ${{ matrix.args }}

@@ -4,6 +4,7 @@ artifacts
 src-tauri/target
 .DS_Store
 src-tauri/gen
+src-tauri/tauri.release.generated.json
 .env
 legacy/macos-3/.build
 legacy/macos-3/work

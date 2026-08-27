@@ -1,12 +1,13 @@
 {
   "name": "modelay",
-  "version": "4.0.0-alpha.1",
+  "version": "4.0.0-alpha.2",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
     "check:version": "node scripts/check-version.mjs",
+    "prepare:update-config": "node scripts/write-updater-config.mjs",
     "test": "npm run test:widget && cargo test --manifest-path src-tauri/Cargo.toml",
     "test:widget": "node --experimental-strip-types --test tests/*.test.mjs",
     "verify": "npm run check:version && npm run build && npm run test:widget && cargo test --manifest-path src-tauri/Cargo.toml && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings",

@@ -17,6 +17,7 @@ Modelay 是面向 Codex/ChatGPT 桌面端的跨平台渠道与额度管理器，
 - 兼容导入 CodexSwitch 3.x 多渠道偏好和 2.x `aiLink`/`ailink.json` 配置，旧数据不删除。
 - 自定义渠道会校验 HTTPS、本机 HTTP、渠道 ID 和 Provider 冲突，避免生成不可区分的配置。
 - 切换后提供“立即重启 / 稍后手动重启”。
+- 启动后自动检查签名更新，设置页支持手动检查、更新说明、下载进度、一键安装和自动重启；签名无效时拒绝安装。
 
 旧版 CodexSwitch 3.x 保存在 `legacy/macos-3`，不会被删除。
 
@@ -60,13 +61,15 @@ Rust/Win32 代码已使用 `cargo-xwin` 和 Windows CRT/SDK 完成交叉编译�
 ## 免费发布准备
 
 - `.github/workflows/build.yml` 会测试后同时生成 macOS ZIP/DMG 与 Windows NSIS/MSI，并附 SHA-256 文件。
-- `.github/workflows/release.yml` 在推送与 `package.json` 版本一致的 `v*` 标签时创建 GitHub Release，例如 `v4.0.0-alpha.1`。
-- 当前不会启用空配置 Updater，也不会生成或提交更新私钥。稳定后再把 Tauri 更新公钥与端点加入发布配置，私钥仅放在安全凭据存储或 GitHub Actions Secret 中。
+- `.github/workflows/release.yml` 在推送与 `package.json` 版本一致的 `v*` 标签时创建 GitHub Release，例如 `v4.0.0-alpha.2`，并发布签名更新产物与 `latest.json`。
+- 更新公钥已写入应用；加密私钥只保存在本机 `/Users/Admin/Library/Application Support/Modelay Development/updater/modelay-updater.key`，密码保存在 macOS Keychain，不进入仓库。
+- 发布仓库需要公开读取 Release 资产，并在 GitHub Actions Secrets 中配置 `TAURI_SIGNING_PRIVATE_KEY` 与 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`。
+- 旧的 `4.0.0-alpha.1` 安装包没有更新器，因此需要手动安装一次 `4.0.0-alpha.2`；从该版本开始才可应用内升级。
 
 ## 当前验证结果
 
 - Rust 单元测试：23 项通过。
-- TypeScript 悬浮窗、额度标签和模型选择测试：9 项通过。
+- TypeScript 悬浮窗、额度标签、模型选择和更新状态测试：12 项通过。
 - Rust Clippy 全目标零警告：通过。
 - TypeScript 检查与 Vite 生产构建：通过。
 - npm 生产依赖高危漏洞检查：0 项。
@@ -79,4 +82,5 @@ Rust/Win32 代码已使用 `cargo-xwin` 和 Windows CRT/SDK 完成交叉编译�
 
 - 首次 OpenAI → AiLink → OpenAI 真实往返会修改 Codex 配置、任务数据库并重启 ChatGPT，需要用户在执行前确认。
 - Windows 运行时行为需要 Windows 实机验收。
-- GitHub Releases、正式更新和代码签名需要相应账号或签名凭据。
+- 首次上线更新源需要创建或连接公开 GitHub 仓库，并写入两项 Actions Secrets。
+- Apple/Windows 正式代码签名仍需要相应证书，但不阻塞 Tauri 更新包的独立签名验证。
