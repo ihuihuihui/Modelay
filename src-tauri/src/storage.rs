@@ -46,6 +46,14 @@ fn normalize(preferences: &mut Preferences) {
     if preferences.official_model.trim().is_empty() {
         preferences.official_model = "gpt-5.6-sol".into();
     }
+    if !crate::models::valid_reasoning_effort(&preferences.official_reasoning_effort) {
+        preferences.official_reasoning_effort = crate::models::default_reasoning_effort();
+    }
+    for channel in &mut preferences.channels {
+        if !crate::models::valid_reasoning_effort(&channel.reasoning_effort) {
+            channel.reasoning_effort = crate::models::default_reasoning_effort();
+        }
+    }
     if preferences
         .last_channel_id
         .as_ref()

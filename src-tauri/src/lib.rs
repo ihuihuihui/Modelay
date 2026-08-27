@@ -69,7 +69,10 @@ pub fn run() {
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "open" => show_main_window(app),
-                    "quit" => app.exit(0),
+                    "quit" => {
+                        codex::reset_rpc();
+                        app.exit(0);
+                    }
                     _ => {}
                 })
                 .on_tray_icon_event(|tray, event| {
@@ -102,6 +105,9 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building Modelay");
     app.run(|app, event| {
+        if let tauri::RunEvent::Exit = event {
+            codex::reset_rpc();
+        }
         #[cfg(target_os = "macos")]
         if let tauri::RunEvent::Reopen { .. } = event {
             show_main_window(app);

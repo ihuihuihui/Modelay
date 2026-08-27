@@ -48,15 +48,30 @@ pub fn active_model(document: &DocumentMut) -> String {
         .to_owned()
 }
 
-pub fn activate_official(document: &mut DocumentMut, model: &str) {
+pub fn active_reasoning_effort(document: &DocumentMut) -> String {
+    document
+        .get("model_reasoning_effort")
+        .and_then(Item::as_str)
+        .filter(|value| crate::models::valid_reasoning_effort(value))
+        .unwrap_or("medium")
+        .to_owned()
+}
+
+pub fn activate_official(document: &mut DocumentMut, model: &str, reasoning_effort: &str) {
     document["model"] = value(model);
+    document["model_reasoning_effort"] = value(reasoning_effort);
     document.remove("model_provider");
 }
 
-pub fn activate_channel(document: &mut DocumentMut, channel: &ChannelProfile) -> Result<()> {
+pub fn activate_channel(
+    document: &mut DocumentMut,
+    channel: &ChannelProfile,
+    reasoning_effort: &str,
+) -> Result<()> {
     let provider_id = channel.provider_id();
     document["model_provider"] = value(&provider_id);
     document["model"] = value(channel.model.trim());
+    document["model_reasoning_effort"] = value(reasoning_effort);
     if !document.contains_key("model_providers") {
         document["model_providers"] = Item::Table(Table::new());
     }
@@ -144,14 +159,15 @@ enabled = true
         let mut document = fixture.parse::<DocumentMut>().unwrap();
         let mut channel = ChannelProfile::ailink();
         channel.model = "gpt-5.6-sol".into();
-        activate_channel(&mut document, &channel).unwrap();
+        activate_channel(&mut document, &channel, "medium").unwrap();
         let output = document.to_string();
         assert!(output.contains("[mcp_servers.node]"));
         assert!(output.contains("[plugins.\"browser@openai-bundled\"]"));
         assert!(!output.contains("experimental_bearer_token"));
         assert!(is_channel_conformant(&document, &channel));
-        activate_official(&mut document, "gpt-5.6-sol");
+        activate_official(&mut document, "gpt-5.6-sol", "low");
         assert!(document.get("model_provider").is_none());
+        assert_eq!(active_reasoning_effort(&document), "low");
         assert!(document.to_string().contains("[model_providers.custom]"));
     }
 }

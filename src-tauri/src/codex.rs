@@ -4,9 +4,9 @@ use crate::platform;
 use regex::Regex;
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Read, Write};
-use std::process::{Command, Stdio};
-use std::sync::mpsc;
-use std::time::Duration;
+use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::{mpsc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 use wait_timeout::ChildExt;
 
 pub struct CommandOutput {
@@ -232,66 +232,146 @@ pub fn summary(text: &str) -> String {
         .collect()
 }
 
-pub fn rpc(method: &str, params: Value, timeout: Duration) -> Result<Value> {
-    let mut command = Command::new(platform::codex_executable()?);
-    command
-        .args(["app-server", "--stdio"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-    platform::clear_provider_environment(&mut command);
-    let mut child = command.spawn()?;
-    let mut input = child
-        .stdin
-        .take()
-        .ok_or_else(|| ModelayError::Message("无法连接 Codex app-server 输入。".into()))?;
-    let output = child
-        .stdout
-        .take()
-        .ok_or_else(|| ModelayError::Message("无法连接 Codex app-server 输出。".into()))?;
-    let (sender, receiver) = mpsc::channel();
-    let output_reader = std::thread::spawn(move || {
-        for line in BufReader::new(output)
-            .lines()
-            .map_while(std::result::Result::ok)
-        {
-            if let Ok(value) = serde_json::from_str::<Value>(&line) {
-                if value.get("id").and_then(Value::as_i64) == Some(2) {
-                    let _ = sender.send(value);
-                    return;
+struct RpcProcess {
+    child: Child,
+    input: ChildStdin,
+    receiver: mpsc::Receiver<Value>,
+    output_reader: Option<std::thread::JoinHandle<()>>,
+    next_id: i64,
+}
+
+impl RpcProcess {
+    fn spawn() -> Result<Self> {
+        let mut command = Command::new(platform::codex_executable()?);
+        command
+            .args(["app-server", "--stdio"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        platform::clear_provider_environment(&mut command);
+        let mut child = command.spawn()?;
+        let input = child
+            .stdin
+            .take()
+            .ok_or_else(|| ModelayError::Message("无法连接 Codex app-server 输入。".into()))?;
+        let output = child
+            .stdout
+            .take()
+            .ok_or_else(|| ModelayError::Message("无法连接 Codex app-server 输出。".into()))?;
+        let (sender, receiver) = mpsc::channel();
+        let output_reader = std::thread::spawn(move || {
+            for line in BufReader::new(output)
+                .lines()
+                .map_while(std::result::Result::ok)
+            {
+                if let Ok(value) = serde_json::from_str::<Value>(&line) {
+                    if value.get("id").is_some() {
+                        let _ = sender.send(value);
+                    }
                 }
             }
-        }
-    });
-    let requests = [
-        json!({"id":1,"method":"initialize","params":{"clientInfo":{"name":"modelay","title":"Modelay","version":env!("CARGO_PKG_VERSION")},"capabilities":null}}),
-        json!({"method":"initialized"}),
-        json!({"id":2,"method":method,"params":params}),
-    ];
-    let result = (|| -> Result<Value> {
-        for request in requests {
-            writeln!(input, "{}", serde_json::to_string(&request)?)?;
-            input.flush()?;
-        }
-        receiver
-            .recv_timeout(timeout)
-            .map_err(|_| ModelayError::Message(format!("读取 Codex {method} 超时。")))
-    })();
-    drop(input);
-    let _ = child.kill();
-    let _ = child.wait();
-    let _ = output_reader.join();
-    let response = result?;
-    if let Some(error) = response.get("error") {
-        return Err(ModelayError::Message(format!(
-            "Codex {method} 返回错误：{}",
-            redact(&error.to_string())
-        )));
+        });
+        let mut process = Self {
+            child,
+            input,
+            receiver,
+            output_reader: Some(output_reader),
+            next_id: 2,
+        };
+        process.write(&json!({"id":1,"method":"initialize","params":{"clientInfo":{"name":"modelay","title":"Modelay","version":env!("CARGO_PKG_VERSION")},"capabilities":null}}))?;
+        process.wait_for(1, Duration::from_secs(20), "initialize")?;
+        process.write(&json!({"method":"initialized"}))?;
+        Ok(process)
     }
-    response
-        .get("result")
-        .cloned()
-        .ok_or_else(|| ModelayError::Message(format!("Codex {method} 未返回结果。")))
+
+    fn write(&mut self, request: &Value) -> Result<()> {
+        writeln!(self.input, "{}", serde_json::to_string(request)?)?;
+        self.input.flush()?;
+        Ok(())
+    }
+
+    fn wait_for(&mut self, id: i64, timeout: Duration, method: &str) -> Result<Value> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(ModelayError::Message(format!("读取 Codex {method} 超时。")));
+            }
+            let value = self
+                .receiver
+                .recv_timeout(remaining)
+                .map_err(|_| ModelayError::Message(format!("读取 Codex {method} 超时。")))?;
+            if value.get("id").and_then(Value::as_i64) == Some(id) {
+                return Ok(value);
+            }
+        }
+    }
+
+    fn request(&mut self, method: &str, params: Value, timeout: Duration) -> Result<Value> {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.write(&json!({"id":id,"method":method,"params":params}))?;
+        let response = self.wait_for(id, timeout, method)?;
+        if let Some(error) = response.get("error") {
+            return Err(ModelayError::Message(format!(
+                "Codex {method} 返回错误：{}",
+                redact(&error.to_string())
+            )));
+        }
+        response
+            .get("result")
+            .cloned()
+            .ok_or_else(|| ModelayError::Message(format!("Codex {method} 未返回结果。")))
+    }
+
+    fn stop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        if let Some(reader) = self.output_reader.take() {
+            let _ = reader.join();
+        }
+    }
+}
+
+impl Drop for RpcProcess {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+fn rpc_process() -> &'static Mutex<Option<RpcProcess>> {
+    static PROCESS: OnceLock<Mutex<Option<RpcProcess>>> = OnceLock::new();
+    PROCESS.get_or_init(|| Mutex::new(None))
+}
+
+pub fn reset_rpc() {
+    if let Ok(mut process) = rpc_process().lock() {
+        *process = None;
+    }
+}
+
+pub fn rpc(method: &str, params: Value, timeout: Duration) -> Result<Value> {
+    let mut process = rpc_process()
+        .lock()
+        .map_err(|_| ModelayError::Message("Codex app-server 状态锁异常。".into()))?;
+    if process.is_none() {
+        *process = Some(RpcProcess::spawn()?);
+    }
+    let result =
+        process
+            .as_mut()
+            .expect("process initialized")
+            .request(method, params.clone(), timeout);
+    if result.is_ok() {
+        return result;
+    }
+    *process = None;
+    let mut replacement = RpcProcess::spawn()?;
+    let retried = replacement.request(method, params, timeout);
+    if retried.is_ok() {
+        *process = Some(replacement);
+    }
+    retried
 }
 
 pub fn list_models() -> Result<Vec<ModelInfo>> {

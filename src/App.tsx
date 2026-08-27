@@ -9,29 +9,32 @@ import { classifyUpdaterError, downloadPercent, type UpdatePhase } from "./updat
 import { quotaLabel } from "./usageFormatting";
 
 type Channel = {
-  id: string; name: string; baseUrl: string; model: string; modelsPath: string;
+  id: string; name: string; baseUrl: string; model: string; reasoningEffort: string; modelsPath: string;
   usagePath: string; validatesModelList: boolean; isBuiltIn: boolean; hasSecret?: boolean;
 };
 type AppState = {
   platform: string; currentMode: "official" | "channel" | "unknown"; currentChannelId?: string;
-  currentProviderId: string; currentModel: string; officialLoggedIn: boolean; configExists: boolean;
-  configConformant: boolean; imageSkill: string; channels: Channel[]; officialModel: string; backupDirectory: string;
+  currentProviderId: string; currentModel: string; currentReasoningEffort: string; officialLoggedIn: boolean; configExists: boolean;
+  configConformant: boolean; imageSkill: string; channels: Channel[]; officialModel: string; officialReasoningEffort: string; backupDirectory: string;
   dockMode: "free" | "edge" | "off"; widgetPosition?: { x: number; y: number };
 };
 type ModelInfo = { id: string; displayName: string; description: string; isDefault: boolean; supportedReasoningEfforts: string[] };
 type CheckResult = { title: string; detail: string; state: "passed" | "warning" | "failed" };
-type SwitchReport = { channelId: string; providerId: string; model: string; imageSkill: string; backupPath: string; needsRestart: boolean; checks: CheckResult[] };
+type SwitchReport = { channelId: string; providerId: string; model: string; reasoningEffort: string; imageSkill: string; backupPath: string; needsRestart: boolean; checks: CheckResult[] };
 type UsageWindow = { remainingPercent: number; durationMinutes?: number; resetsAt?: number };
 type UsageSnapshot = { kind: "official" | "channel"; channelId: string; planName?: string; fiveHour?: UsageWindow; weekly?: UsageWindow; remainingBalance?: number; balanceLabel?: string; creditsBalance?: string; updatedAt: number };
 type Draft = Channel & { secret: string };
 type InfoPanel = "help" | "settings" | null;
 
-const officialChannel: Channel = { id: "official", name: "OpenAI 官方", baseUrl: "ChatGPT 账号登录", model: "", modelsPath: "", usagePath: "", validatesModelList: true, isBuiltIn: true };
+const officialChannel: Channel = { id: "official", name: "OpenAI 官方", baseUrl: "ChatGPT 账号登录", model: "", reasoningEffort: "medium", modelsPath: "", usagePath: "", validatesModelList: true, isBuiltIn: true };
+const fallbackReasoningEfforts = ["low", "medium", "high"];
+const reasoningLabels: Record<string, string> = { none: "即时", low: "快速", medium: "平衡（推荐）", high: "深度", xhigh: "极深", max: "最大" };
 
 function App() {
   const [state, setState] = useState<AppState | null>(null);
   const [selectedId, setSelectedId] = useState("official");
   const [selectedModel, setSelectedModel] = useState("");
+  const [selectedReasoningEffort, setSelectedReasoningEffort] = useState("medium");
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelError, setModelError] = useState<string | null>(null);
@@ -62,6 +65,12 @@ function App() {
   const selected = allChannels.find((channel) => channel.id === selectedId) ?? officialChannel;
   const activeId = state?.currentMode === "official" ? "official" : state?.currentChannelId;
   const active = allChannels.find((channel) => channel.id === activeId);
+  const selectedModelInfo = models.find((model) => model.id === selectedModel);
+  const availableReasoningEfforts = useMemo(() => {
+    const advertised = selectedModelInfo?.supportedReasoningEfforts ?? [];
+    const values = advertised.length ? advertised : fallbackReasoningEfforts;
+    return values.includes(selectedReasoningEffort) ? values : [...values, selectedReasoningEffort];
+  }, [selectedModelInfo, selectedReasoningEffort]);
 
   const loadState = useCallback(async () => {
     try {
@@ -139,8 +148,19 @@ function App() {
     if (!state) return;
     const selectedChannel = state.channels.find((channel) => channel.id === selectedId);
     const fallback = selectedId === "official" ? state.officialModel : selectedChannel?.model ?? "";
+    const preferredEffort = activeId === selectedId && fallback === state.currentModel
+      ? state.currentReasoningEffort
+      : selectedId === "official" ? state.officialReasoningEffort : selectedChannel?.reasoningEffort ?? "medium";
+    setSelectedReasoningEffort(preferredEffort);
     void loadModels(selectedId, fallback, selectedId === "official" || (selectedChannel?.validatesModelList ?? true));
-  }, [state, selectedId, loadModels]);
+  }, [state, selectedId, activeId, loadModels]);
+
+  useEffect(() => {
+    const advertised = selectedModelInfo?.supportedReasoningEfforts ?? [];
+    if (advertised.length && !advertised.includes(selectedReasoningEffort)) {
+      setSelectedReasoningEffort(advertised.includes("medium") ? "medium" : advertised[0]);
+    }
+  }, [selectedModelInfo, selectedReasoningEffort]);
 
   const refreshUsage = useCallback(async () => {
     if (!activeId) return;
@@ -160,8 +180,8 @@ function App() {
     if (!selectedModel || modelError) return;
     setBusy(true); setError(null); setReport(null); setMessage("正在备份、切换并验证真实配置…");
     try {
-      const result = await invoke<SwitchReport>("switch_channel", { request: { channelId: selectedId, model: selectedModel } });
-      setReport(result); setRestartOpen(result.needsRestart); setMessage(`已切换为 ${selected.name} / ${selectedModel}`);
+      const result = await invoke<SwitchReport>("switch_channel", { request: { channelId: selectedId, model: selectedModel, reasoningEffort: selectedReasoningEffort } });
+      setReport(result); setRestartOpen(result.needsRestart); setMessage(`已切换为 ${selected.name} / ${selectedModel} / ${reasoningLabels[selectedReasoningEffort] ?? selectedReasoningEffort}`);
       await loadState(); await refreshUsage();
     } catch (reason) { setError(String(reason)); setMessage("切换失败，已尝试恢复原配置"); }
     finally { setBusy(false); }
@@ -250,7 +270,7 @@ function App() {
   }
 
   function editChannel(channel?: Channel) {
-    const value = channel ?? { id: `channel-${crypto.randomUUID().slice(0, 8)}`, name: "", baseUrl: "", model: "", modelsPath: "/v1/models", usagePath: "", validatesModelList: true, isBuiltIn: false };
+    const value = channel ?? { id: `channel-${crypto.randomUUID().slice(0, 8)}`, name: "", baseUrl: "", model: "", reasoningEffort: "medium", modelsPath: "/v1/models", usagePath: "", validatesModelList: true, isBuiltIn: false };
     setDraft({ ...value, secret: "" });
   }
 
@@ -263,7 +283,7 @@ function App() {
       <div className="top-actions"><span className="platform"><span className={`dot ${state?.configConformant ? "" : "warn"}`} />{state?.platform ?? "读取中"}</span>{updatePhase === "available" && <button className="update-badge" title={`可更新至 ${updateVersion}`} onClick={() => setUpdateOpen(true)}><Download size={13} />新版本</button>}<button className="icon-btn" title="打开备份目录" onClick={() => void invoke("open_backup_folder")}><FolderOpen size={17} /></button><button className="icon-btn" title="帮助" onClick={() => setInfoPanel("help")}><CircleHelp size={17} /></button><button className="icon-btn" title="设置" onClick={() => setInfoPanel("settings")}><Settings2 size={17} /></button></div>
     </header>
     <main className="content">
-      <section className="hero"><div><p className="eyebrow">当前实际渠道</p><h1>{active?.name ?? state?.currentProviderId ?? "正在检测"}</h1><p className="hero-detail">{state ? `${state.currentProviderId} · ${state.currentModel || "未设置模型"}` : "正在读取 ~/.codex/config.toml"} {state && <span className={`status-pill ${state.configConformant ? "" : "warning"}`}><span className={`dot ${state.configConformant ? "" : "warn"}`} />{state.configConformant ? "配置一致" : "配置需修复"}</span>}</p></div><div className="hero-actions"><button className="ghost-btn" onClick={() => void loadState()} disabled={busy}><RefreshCw size={15} />刷新状态</button>{state && !state.officialLoggedIn && selectedId === "official" && <button className="ghost-btn" onClick={loginOfficial} disabled={busy}><LogIn size={15} />登录 OpenAI</button>}<button className="primary-btn" onClick={switchChannel} disabled={!canSwitch}>{busy ? <RefreshCw size={15} className="spin" /> : <Wifi size={15} />}{isCurrent && selectedModel === state?.currentModel ? "重新验证并覆盖" : "切换并覆盖旧任务"}</button></div></section>
+      <section className="hero"><div><p className="eyebrow">当前实际渠道</p><h1>{active?.name ?? state?.currentProviderId ?? "正在检测"}</h1><p className="hero-detail">{state ? `${state.currentProviderId} · ${state.currentModel || "未设置模型"} · ${reasoningLabels[state.currentReasoningEffort] ?? state.currentReasoningEffort}` : "正在读取 ~/.codex/config.toml"} {state && <span className={`status-pill ${state.configConformant ? "" : "warning"}`}><span className={`dot ${state.configConformant ? "" : "warn"}`} />{state.configConformant ? "配置一致" : "配置需修复"}</span>}</p></div><div className="hero-actions"><button className="ghost-btn" onClick={() => void loadState()} disabled={busy}><RefreshCw size={15} />刷新状态</button>{state && !state.officialLoggedIn && selectedId === "official" && <button className="ghost-btn" onClick={loginOfficial} disabled={busy}><LogIn size={15} />登录 OpenAI</button>}<button className="primary-btn" onClick={switchChannel} disabled={!canSwitch}>{busy ? <RefreshCw size={15} className="spin" /> : <Wifi size={15} />}{isCurrent && selectedModel === state?.currentModel && selectedReasoningEffort === state?.currentReasoningEffort ? "重新验证并覆盖" : "切换并覆盖旧任务"}</button></div></section>
 
       {error && <div className="error-banner"><AlertTriangle size={17} /><div><strong>操作未完成</strong><span>{error}</span></div><button onClick={() => setError(null)}><X size={15} /></button></div>}
 
@@ -271,6 +291,7 @@ function App() {
         <section className="panel channels-panel"><div className="panel-head"><div><h2>目标渠道与模型</h2><p>所有状态来自本机真实配置和服务端能力</p></div><button className="add-btn" onClick={() => editChannel()}><Plus size={15} />添加渠道</button></div>
           <div className="channel-list">{allChannels.map((channel) => <div className={`channel-card ${channel.id === selectedId ? "selected" : ""}`} key={channel.id} onClick={() => setSelectedId(channel.id)}><div className={`channel-icon ${channel.id === "official" ? "official" : "custom"}`}>{channel.id === "official" ? <Sparkles size={18} /> : <Plus size={18} />}</div><div className="channel-info"><strong>{channel.name}{activeId === channel.id && <small>当前</small>}</strong><span>{channel.id === "official" ? (state?.officialLoggedIn ? "ChatGPT 官方账号已登录" : "需要登录 ChatGPT 官方账号") : `${channel.baseUrl} · ${channel.hasSecret ? "密钥已保存" : "缺少密钥"}`}</span></div><div className="channel-right">{channel.id !== "official" && <button className="mini-btn" title="编辑" onClick={(event) => { event.stopPropagation(); editChannel(channel); }}><Pencil size={13} /></button>}{!channel.isBuiltIn && channel.id !== "official" && <button className="mini-btn danger" title="删除" onClick={(event) => { event.stopPropagation(); setPendingDelete(channel); }}><Trash2 size={13} /></button>}{channel.id === selectedId ? <span className="selected-check"><Check size={14} /></span> : <ChevronRight size={16} className="muted" />}</div></div>)}</div>
           <div className="model-picker"><div><strong>目标模型</strong><span>{modelsLoading ? "正在读取服务端模型…" : modelError ?? modelNotice ?? `${models.length} 个可用模型`}</span></div><select value={selectedModel} onChange={(event) => setSelectedModel(event.target.value)} disabled={modelsLoading || !!modelError}>{models.map((model) => <option value={model.id} key={model.id}>{model.displayName || model.id}{model.isDefault ? "（默认）" : ""}</option>)}{!models.length && selectedModel && <option value={selectedModel}>{selectedModel}</option>}</select><button className="icon-btn" title="刷新模型" onClick={() => void loadModels(selectedId, selectedModel, selectedId === "official" || selected.validatesModelList)}><RefreshCw size={15} className={modelsLoading ? "spin" : ""} /></button></div>
+          <div className="reasoning-picker"><div><strong>推理强度</strong><span>平衡模式能明显缩短多数任务的等待时间</span></div><select value={selectedReasoningEffort} onChange={(event) => setSelectedReasoningEffort(event.target.value)}>{availableReasoningEfforts.map((effort) => <option value={effort} key={effort}>{reasoningLabels[effort] ?? effort}</option>)}</select>{["high", "xhigh", "max"].includes(selectedReasoningEffort) && <small><AlertTriangle size={12} />深度推理耗时更长，长任务也更容易经历断线重试</small>}</div>
         </section>
 
         <section className="side-stack">
@@ -279,13 +300,13 @@ function App() {
         </section>
       </div>
 
-      {report && <section className="panel report-panel"><div className="panel-head"><div><h2>最近一次切换报告</h2><p>{report.providerId} · {report.model} · ${report.imageSkill}</p></div><span className="report-ok"><Check size={15} />已完成</span></div><div className="report-grid">{report.checks.map((check, index) => <div className={`report-row ${check.state}`} key={`${check.title}-${index}`}><span>{check.state === "passed" ? <Check size={14} /> : <AlertTriangle size={14} />}</span><div><strong>{check.title}</strong><small>{check.detail}</small></div></div>)}</div></section>}
+      {report && <section className="panel report-panel"><div className="panel-head"><div><h2>最近一次切换报告</h2><p>{report.providerId} · {report.model} · {reasoningLabels[report.reasoningEffort] ?? report.reasoningEffort} · ${report.imageSkill}</p></div><span className="report-ok"><Check size={15} />已完成</span></div><div className="report-grid">{report.checks.map((check, index) => <div className={`report-row ${check.state}`} key={`${check.title}-${index}`}><span>{check.state === "passed" ? <Check size={14} /> : <AlertTriangle size={14} />}</span><div><strong>{check.title}</strong><small>{check.detail}</small></div></div>)}</div></section>}
 
       <section className="panel bottom-panel"><div className="bottom-item"><div className="bottom-icon"><KeyRound size={17} /></div><div><strong>系统安全存储</strong><span>API Key 不写入 config.toml 或前端存储</span></div></div><div className="bottom-item"><div className="bottom-icon"><Database size={17} /></div><div><strong>配置与任务双备份</strong><span>SQLite 事务只覆盖用户任务</span></div></div><div className="bottom-item"><div className="bottom-icon"><Copy size={17} /></div><div><strong>生图路由</strong><span>当前默认 ${state?.imageSkill ?? "读取中"}</span></div></div></section>
       <div className="statusbar"><span><span className={`dot ${error ? "warn" : ""}`} />{message}</span><span>免费开发模式 · 未配置正式代码签名</span></div>
     </main>
 
-    {draft && <div className="modal-backdrop"><div className="modal"><div className="modal-head"><div><h2>{state?.channels.some((channel) => channel.id === draft.id) ? `编辑 ${draft.name}` : "添加自定义渠道"}</h2><p>Codex 自定义 Provider 固定使用 Responses API</p></div><button className="icon-btn" onClick={() => setDraft(null)}><X size={18} /></button></div><label>渠道名称<input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></label><label>API 地址<input value={draft.baseUrl} onChange={(event) => setDraft({ ...draft, baseUrl: event.target.value })} placeholder="https://example.com" /></label><label>API 密钥<input type="password" value={draft.secret} onChange={(event) => setDraft({ ...draft, secret: event.target.value })} placeholder={draft.hasSecret ? "留空则保留已保存密钥" : "请输入密钥"} autoComplete="new-password" /></label><div className="form-row"><label>默认模型<input value={draft.model} onChange={(event) => setDraft({ ...draft, model: event.target.value })} /></label><label>协议<input value="Responses" disabled /></label></div><div className="form-row"><label>模型列表路径<input value={draft.modelsPath} onChange={(event) => setDraft({ ...draft, modelsPath: event.target.value })} /></label><label>余额路径<input value={draft.usagePath} onChange={(event) => setDraft({ ...draft, usagePath: event.target.value })} placeholder="留空表示不查询余额" /></label></div><label className="toggle-row"><input type="checkbox" checked={draft.validatesModelList} onChange={(event) => setDraft({ ...draft, validatesModelList: event.target.checked })} />切换前校验服务端模型列表</label><div className="secret-note"><KeyRound size={15} /><span>{draft.hasSecret ? "已有密钥保存在系统凭据库。输入新值会覆盖，留空保持不变。" : "密钥将写入 macOS Keychain 或 Windows Credential Manager，不会返回给界面。"}</span></div><div className="modal-actions">{draft.hasSecret && <button className="danger-btn" onClick={() => setConfirmSecretDelete(true)}>删除密钥</button>}<button className="ghost-btn" onClick={() => setDraft(null)}>取消</button><button className="primary-btn" onClick={() => void saveChannel()} disabled={busy}>保存渠道</button></div></div></div>}
+    {draft && <div className="modal-backdrop"><div className="modal"><div className="modal-head"><div><h2>{state?.channels.some((channel) => channel.id === draft.id) ? `编辑 ${draft.name}` : "添加自定义渠道"}</h2><p>Codex 自定义 Provider 固定使用 Responses API</p></div><button className="icon-btn" onClick={() => setDraft(null)}><X size={18} /></button></div><label>渠道名称<input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></label><label>API 地址<input value={draft.baseUrl} onChange={(event) => setDraft({ ...draft, baseUrl: event.target.value })} placeholder="https://example.com" /></label><label>API 密钥<input type="password" value={draft.secret} onChange={(event) => setDraft({ ...draft, secret: event.target.value })} placeholder={draft.hasSecret ? "留空则保留已保存密钥" : "请输入密钥"} autoComplete="new-password" /></label><div className="form-row"><label>默认模型<input value={draft.model} onChange={(event) => setDraft({ ...draft, model: event.target.value })} /></label><label>默认推理强度<select value={draft.reasoningEffort} onChange={(event) => setDraft({ ...draft, reasoningEffort: event.target.value })}>{Object.entries(reasoningLabels).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label></div><div className="form-row"><label>模型列表路径<input value={draft.modelsPath} onChange={(event) => setDraft({ ...draft, modelsPath: event.target.value })} /></label><label>余额路径<input value={draft.usagePath} onChange={(event) => setDraft({ ...draft, usagePath: event.target.value })} placeholder="留空表示不查询余额" /></label></div><label className="toggle-row"><input type="checkbox" checked={draft.validatesModelList} onChange={(event) => setDraft({ ...draft, validatesModelList: event.target.checked })} />切换前校验服务端模型列表</label><div className="secret-note"><KeyRound size={15} /><span>{draft.hasSecret ? "已有密钥保存在系统凭据库。输入新值会覆盖，留空保持不变。" : "密钥将写入 macOS Keychain 或 Windows Credential Manager，不会返回给界面。"}</span></div><div className="modal-actions">{draft.hasSecret && <button className="danger-btn" onClick={() => setConfirmSecretDelete(true)}>删除密钥</button>}<button className="ghost-btn" onClick={() => setDraft(null)}>取消</button><button className="primary-btn" onClick={() => void saveChannel()} disabled={busy}>保存渠道</button></div></div></div>}
 
     {infoPanel && <div className="modal-backdrop"><div className="modal info-modal"><div className="modal-head"><div><h2>{infoPanel === "help" ? "Modelay 使用帮助" : "Modelay 设置"}</h2><p>{infoPanel === "help" ? "渠道切换、旧任务覆盖与安全边界" : "当前运行环境、本地数据与软件更新"}</p></div><button className="icon-btn" onClick={() => setInfoPanel(null)}><X size={18} /></button></div>{infoPanel === "help" ? <div className="info-list"><div><strong>切换渠道</strong><span>选择渠道和服务端实际可用模型后，Modelay 会先备份，再写配置、验证服务并覆盖用户任务索引。</span></div><div><strong>继续旧任务</strong><span>只覆盖用户任务的 Provider 和模型，不修改消息、rollout、子代理、自动审查或 Ollama 任务。</span></div><div><strong>生图路由</strong><span>官方渠道使用 $imagegen；自定义第三方渠道使用 $imagegen2。</span></div><div><strong>软件更新</strong><span>启动后自动检查签名更新，也可以在设置中手动检查；安装前不会打断当前任务。</span></div><div><strong>出现错误</strong><span>切换事务会恢复配置、环境变量、偏好和生图路由；可从备份目录检查原始文件。</span></div></div> : <div className="info-list"><div><strong>当前 Provider</strong><span>{state?.currentProviderId ?? "读取中"} · {state?.currentModel || "未设置模型"}</span></div><div><strong>应用平台</strong><span>{state?.platform ?? "读取中"}</span></div><div><strong>备份目录</strong><span className="path-text">{state?.backupDirectory ?? "读取中"}</span></div><div><strong>安全存储</strong><span>{state?.platform.startsWith("windows") ? "Windows Credential Manager" : "macOS Keychain"}</span></div><div className="update-setting"><strong>软件更新 · {appVersion}</strong><span>{updateMessage}</span>{updatePhase === "downloading" || updatePhase === "installing" ? <div className="update-progress"><i style={{ width: `${updateProgress ?? 12}%` }} /></div> : null}<button className="ghost-btn info-action" onClick={() => void (updatePhase === "available" ? setUpdateOpen(true) : checkForUpdates(true))} disabled={updatePhase === "checking" || updatePhase === "downloading" || updatePhase === "installing"}>{updatePhase === "checking" ? <RefreshCw size={15} className="spin" /> : updatePhase === "available" ? <Download size={15} /> : <RefreshCw size={15} />}{updatePhase === "available" ? `安装 ${updateVersion}` : "检查更新"}</button></div><button className="ghost-btn info-action" onClick={() => void invoke("open_backup_folder")}><FolderOpen size={15} />打开备份目录</button></div>}</div></div>}
 

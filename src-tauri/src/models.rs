@@ -8,6 +8,8 @@ pub struct ChannelProfile {
     #[serde(alias = "baseURL")]
     pub base_url: String,
     pub model: String,
+    #[serde(default = "default_reasoning_effort", alias = "reasoningEffort")]
+    pub reasoning_effort: String,
     #[serde(default = "default_models_path", alias = "modelsPath")]
     pub models_path: String,
     #[serde(default = "default_usage_path", alias = "usagePath")]
@@ -29,6 +31,13 @@ fn default_usage_path() -> String {
 fn default_true() -> bool {
     true
 }
+pub fn default_reasoning_effort() -> String {
+    "medium".into()
+}
+
+pub fn valid_reasoning_effort(value: &str) -> bool {
+    matches!(value, "none" | "low" | "medium" | "high" | "xhigh" | "max")
+}
 
 impl ChannelProfile {
     #[cfg(test)]
@@ -38,6 +47,7 @@ impl ChannelProfile {
             name: "AiLink".into(),
             base_url: "https://ai.ailink1.com".into(),
             model: "gpt-5.6-sol".into(),
+            reasoning_effort: default_reasoning_effort(),
             models_path: default_models_path(),
             usage_path: default_usage_path(),
             validates_model_list: true,
@@ -109,6 +119,11 @@ pub struct Preferences {
     pub channels: Vec<ChannelProfile>,
     #[serde(default = "default_official_model", alias = "officialModel")]
     pub official_model: String,
+    #[serde(
+        default = "default_reasoning_effort",
+        alias = "officialReasoningEffort"
+    )]
+    pub official_reasoning_effort: String,
     #[serde(default, alias = "lastChannelID")]
     pub last_channel_id: Option<String>,
     #[serde(default = "default_dock_mode")]
@@ -132,6 +147,7 @@ impl Default for Preferences {
         Self {
             channels: default_channels(),
             official_model: default_official_model(),
+            official_reasoning_effort: default_reasoning_effort(),
             last_channel_id: None,
             dock_mode: default_dock_mode(),
             widget_position: None,
@@ -159,6 +175,7 @@ pub struct SaveChannelRequest {
 pub struct SwitchRequest {
     pub channel_id: String,
     pub model: String,
+    pub reasoning_effort: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -182,6 +199,7 @@ pub struct SwitchReport {
     pub channel_id: String,
     pub provider_id: String,
     pub model: String,
+    pub reasoning_effort: String,
     pub image_skill: String,
     pub backup_path: String,
     pub needs_restart: bool,
@@ -196,12 +214,14 @@ pub struct AppState {
     pub current_channel_id: Option<String>,
     pub current_provider_id: String,
     pub current_model: String,
+    pub current_reasoning_effort: String,
     pub official_logged_in: bool,
     pub config_exists: bool,
     pub config_conformant: bool,
     pub image_skill: String,
     pub channels: Vec<ChannelProfile>,
     pub official_model: String,
+    pub official_reasoning_effort: String,
     pub backup_directory: String,
     pub dock_mode: String,
     pub widget_position: Option<WidgetPosition>,
@@ -258,6 +278,7 @@ mod tests {
             name: "Test".into(),
             base_url: "https://proxy.example/v1/".into(),
             model: "m".into(),
+            reasoning_effort: "medium".into(),
             models_path: "/v1/models".into(),
             usage_path: "/v1/usage".into(),
             validates_model_list: true,

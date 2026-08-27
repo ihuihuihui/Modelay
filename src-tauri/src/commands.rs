@@ -2,7 +2,6 @@ use crate::config;
 use crate::error::{command_error, ModelayError, Result};
 use crate::models::*;
 use crate::{codex, paths, platform, secrets, sessions, storage, usage};
-use std::collections::HashSet;
 use std::sync::Mutex;
 use tauri::Manager;
 
@@ -35,6 +34,7 @@ fn app_state() -> Result<AppState> {
     let config = config::read()?;
     let provider = config::active_provider(&config.document);
     let model = config::active_model(&config.document);
+    let reasoning_effort = config::active_reasoning_effort(&config.document);
     let current_channel = preferences
         .channels
         .iter()
@@ -64,12 +64,14 @@ fn app_state() -> Result<AppState> {
         current_channel_id: current_channel.map(|channel| channel.id.clone()),
         current_provider_id: provider,
         current_model: model,
+        current_reasoning_effort: reasoning_effort,
         official_logged_in: codex::login_status(),
         config_exists: config.existed,
         config_conformant: conformant,
         image_skill: storage::load_image_skill(),
         channels,
         official_model: preferences.official_model,
+        official_reasoning_effort: preferences.official_reasoning_effort,
         backup_directory: paths::backup_dir()?.display().to_string(),
         dock_mode: preferences.dock_mode,
         widget_position: preferences.widget_position,
@@ -112,8 +114,15 @@ fn save_channel_inner(request: SaveChannelRequest) -> Result<AppState> {
     channel.name = channel.name.trim().to_owned();
     channel.base_url = channel.normalized_base_url();
     channel.model = channel.model.trim().to_owned();
+    channel.reasoning_effort = channel.reasoning_effort.trim().to_owned();
     if channel.name.is_empty() || channel.model.is_empty() {
         return Err("渠道名称和模型不能为空。".into());
+    }
+    if !valid_reasoning_effort(&channel.reasoning_effort) {
+        return Err(ModelayError::Message(format!(
+            "不支持的默认推理强度 {}。",
+            channel.reasoning_effort
+        )));
     }
     let url = url::Url::parse(&channel.base_url)
         .map_err(|_| ModelayError::Message("API 地址无效。".into()))?;
@@ -440,8 +449,14 @@ fn switch_inner(request: SwitchRequest) -> Result<SwitchReport> {
     let previous_preferences = preferences.clone();
     let is_official = request.channel_id == "official";
     let model = request.model.trim();
+    let reasoning_effort = request.reasoning_effort.trim();
     if model.is_empty() {
         return Err("模型不能为空。".into());
+    }
+    if !valid_reasoning_effort(reasoning_effort) {
+        return Err(ModelayError::Message(format!(
+            "不支持的推理强度 {reasoning_effort}。"
+        )));
     }
     let channel = if is_official {
         None
@@ -464,14 +479,17 @@ fn switch_inner(request: SwitchRequest) -> Result<SwitchReport> {
             model,
             "官方账号",
         )?;
+        ensure_reasoning_supported(&available, model, reasoning_effort, "官方账号")?;
     }
     if let (Some(channel), Some(secret)) = (&channel, &secret) {
         if channel.validates_model_list {
-            let supported: HashSet<_> = usage::list_channel_models(channel, secret)?
-                .into_iter()
-                .map(|model| model.id)
-                .collect();
-            ensure_model_supported(supported.iter().map(String::as_str), model, &channel.name)?;
+            let supported = usage::list_channel_models(channel, secret)?;
+            ensure_model_supported(
+                supported.iter().map(|item| item.id.as_str()),
+                model,
+                &channel.name,
+            )?;
+            ensure_reasoning_supported(&supported, model, reasoning_effort, &channel.name)?;
         }
     }
     let mut config_document = config::read()?;
@@ -492,14 +510,17 @@ fn switch_inner(request: SwitchRequest) -> Result<SwitchReport> {
     let previous_skill_file = storage::snapshot_image_skill()?;
     let session_backup = sessions::backup()?;
     let image_skill = if is_official { "imagegen" } else { "imagegen2" };
+    codex::reset_rpc();
+    usage::clear_cache();
     let result = (|| -> Result<SwitchReport> {
         let provider_id = if is_official {
-            config::activate_official(&mut config_document.document, model);
+            config::activate_official(&mut config_document.document, model, reasoning_effort);
             sessions::detect_official_provider()
         } else {
             let mut selected = channel.clone().unwrap();
             selected.model = model.into();
-            config::activate_channel(&mut config_document.document, &selected)?;
+            selected.reasoning_effort = reasoning_effort.into();
+            config::activate_channel(&mut config_document.document, &selected, reasoning_effort)?;
             selected.provider_id()
         };
         config::write(&config_document.document)?;
@@ -515,7 +536,7 @@ fn switch_inner(request: SwitchRequest) -> Result<SwitchReport> {
         storage::save_image_skill(image_skill)?;
         let mut checks = vec![CheckResult {
             title: "配置文件".into(),
-            detail: "Provider、模型与认证方式已原子写入".into(),
+            detail: format!("Provider、模型、推理强度（{reasoning_effort}）与认证方式已原子写入"),
             state: CheckState::Passed,
         }];
         let doctor_environment = environment_keys
@@ -538,7 +559,9 @@ fn switch_inner(request: SwitchRequest) -> Result<SwitchReport> {
         if is_official {
             checks.push(CheckResult {
                 title: "官方登录与模型".into(),
-                detail: format!("ChatGPT 登录有效，模型 {model} 可用"),
+                detail: format!(
+                    "ChatGPT 登录有效，模型 {model} / 推理强度 {reasoning_effort} 可用"
+                ),
                 state: CheckState::Passed,
             });
             checks.push(CheckResult {
@@ -562,23 +585,28 @@ fn switch_inner(request: SwitchRequest) -> Result<SwitchReport> {
         }
         if is_official {
             preferences.official_model = model.into();
+            preferences.official_reasoning_effort = reasoning_effort.into();
         } else if let Some(item) = preferences
             .channels
             .iter_mut()
             .find(|item| item.id == request.channel_id)
         {
             item.model = model.into();
+            item.reasoning_effort = reasoning_effort.into();
         }
         preferences.last_channel_id = (!is_official).then_some(request.channel_id.clone());
         storage::save_preferences(&preferences)?;
-        if let Some(report) =
-            sessions::rebind_prepared(session_backup.as_ref(), &provider_id, model)?
-        {
+        if let Some(report) = sessions::rebind_prepared(
+            session_backup.as_ref(),
+            &provider_id,
+            model,
+            reasoning_effort,
+        )? {
             checks.push(CheckResult {
                 title: "全部旧任务".into(),
                 detail: format!(
-                    "已覆盖 {} 个用户任务为 {} / {}",
-                    report.changed_count, provider_id, model
+                    "已覆盖 {} 个用户任务为 {} / {} / {}",
+                    report.changed_count, provider_id, model, reasoning_effort
                 ),
                 state: CheckState::Passed,
             });
@@ -603,6 +631,7 @@ fn switch_inner(request: SwitchRequest) -> Result<SwitchReport> {
             channel_id: request.channel_id.clone(),
             provider_id,
             model: model.into(),
+            reasoning_effort: reasoning_effort.into(),
             image_skill: image_skill.into(),
             backup_path: backup_path.display().to_string(),
             needs_restart: true,
@@ -612,6 +641,8 @@ fn switch_inner(request: SwitchRequest) -> Result<SwitchReport> {
     match result {
         Ok(report) => Ok(report),
         Err(error) => {
+            codex::reset_rpc();
+            usage::clear_cache();
             let mut rollback = vec![(
                 "Codex 配置",
                 config::restore(&config_document.original, config_document.existed),
@@ -683,15 +714,17 @@ pub async fn open_backup_folder() -> std::result::Result<(), String> {
 #[tauri::command]
 pub async fn get_usage(channel_id: String) -> std::result::Result<UsageSnapshot, String> {
     run_blocking(move || {
-        if channel_id == "official" {
-            return usage::official();
-        }
-        let preferences = storage::load_preferences()?;
-        let channel = find_channel(&preferences, &channel_id)?;
-        let secret = secrets::get(channel)?.ok_or_else(|| {
-            ModelayError::Message(format!("尚未保存 {} 的 API 密钥。", channel.name))
-        })?;
-        usage::channel(channel, &secret)
+        usage::cached(&channel_id, || {
+            if channel_id == "official" {
+                return usage::official();
+            }
+            let preferences = storage::load_preferences()?;
+            let channel = find_channel(&preferences, &channel_id)?;
+            let secret = secrets::get(channel)?.ok_or_else(|| {
+                ModelayError::Message(format!("尚未保存 {} 的 API 密钥。", channel.name))
+            })?;
+            usage::channel(channel, &secret)
+        })
     })
     .await
 }
@@ -815,6 +848,29 @@ fn ensure_model_supported<'a>(
     }
 }
 
+fn ensure_reasoning_supported(
+    available: &[ModelInfo],
+    model: &str,
+    reasoning_effort: &str,
+    channel_name: &str,
+) -> Result<()> {
+    let Some(info) = available.iter().find(|item| item.id == model) else {
+        return Ok(());
+    };
+    if info.supported_reasoning_efforts.is_empty()
+        || info
+            .supported_reasoning_efforts
+            .iter()
+            .any(|candidate| candidate == reasoning_effort)
+    {
+        Ok(())
+    } else {
+        Err(ModelayError::Message(format!(
+            "{channel_name} 的模型 {model} 不支持推理强度 {reasoning_effort}。"
+        )))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -826,6 +882,36 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("不支持模型"));
+    }
+
+    #[test]
+    fn rejects_reasoning_effort_not_advertised_by_the_model() {
+        let models = vec![ModelInfo {
+            id: "gpt-test".into(),
+            display_name: "GPT Test".into(),
+            description: String::new(),
+            is_default: true,
+            supported_reasoning_efforts: vec!["low".into(), "medium".into()],
+        }];
+        assert!(ensure_reasoning_supported(&models, "gpt-test", "medium", "Test").is_ok());
+        assert!(
+            ensure_reasoning_supported(&models, "gpt-test", "high", "Test")
+                .unwrap_err()
+                .to_string()
+                .contains("不支持推理强度")
+        );
+    }
+
+    #[test]
+    fn accepts_reasoning_effort_when_server_does_not_advertise_capabilities() {
+        let models = vec![ModelInfo {
+            id: "proxy-model".into(),
+            display_name: "Proxy".into(),
+            description: String::new(),
+            is_default: true,
+            supported_reasoning_efforts: Vec::new(),
+        }];
+        assert!(ensure_reasoning_supported(&models, "proxy-model", "high", "Proxy").is_ok());
     }
 
     #[test]

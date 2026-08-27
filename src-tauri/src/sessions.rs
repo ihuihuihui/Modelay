@@ -54,8 +54,15 @@ pub fn rebind_prepared(
     backup: Option<&SessionBackup>,
     provider: &str,
     model: &str,
+    reasoning_effort: &str,
 ) -> Result<Option<RebindReport>> {
-    rebind_prepared_with_timeout(backup, provider, model, Duration::from_secs(10))
+    rebind_prepared_with_timeout(
+        backup,
+        provider,
+        model,
+        reasoning_effort,
+        Duration::from_secs(10),
+    )
 }
 
 #[cfg(test)]
@@ -64,10 +71,17 @@ fn rebind_at_with_timeout(
     backup_directory: &Path,
     provider: &str,
     model: &str,
+    reasoning_effort: &str,
     busy_timeout: Duration,
 ) -> Result<Option<RebindReport>> {
     let backup = backup_at(database_path, backup_directory)?;
-    rebind_prepared_with_timeout(backup.as_ref(), provider, model, busy_timeout)
+    rebind_prepared_with_timeout(
+        backup.as_ref(),
+        provider,
+        model,
+        reasoning_effort,
+        busy_timeout,
+    )
 }
 
 fn backup_at(database_path: &Path, backup_directory: &Path) -> Result<Option<SessionBackup>> {
@@ -95,6 +109,7 @@ fn rebind_prepared_with_timeout(
     backup: Option<&SessionBackup>,
     provider: &str,
     model: &str,
+    reasoning_effort: &str,
     busy_timeout: Duration,
 ) -> Result<Option<RebindReport>> {
     let Some(backup) = backup else {
@@ -104,17 +119,33 @@ fn rebind_prepared_with_timeout(
     connection.busy_timeout(busy_timeout)?;
     validate_schema(&connection)?;
     let has_thread_source = has_column(&connection, "threads", "thread_source")?;
+    let has_reasoning_effort = has_column(&connection, "threads", "reasoning_effort")?;
     let selector = if has_thread_source {
         "thread_source = 'user' AND COALESCE(preview, '') <> '' AND COALESCE(model, '') NOT LIKE '%auto-review%' AND COALESCE(source, '') NOT LIKE '%subagent%'"
     } else {
         "preview <> '' AND COALESCE(model, '') NOT LIKE '%auto-review%' AND COALESCE(source, '') NOT LIKE '%subagent%'"
     };
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let sql = format!("UPDATE threads SET model_provider=?1, model=?2 WHERE (model_provider LIKE 'openai%' OR model_provider='custom' OR model_provider LIKE 'custom_%') AND {selector}");
-    let changed_count = transaction.execute(&sql, params![provider, model])?;
-    let verify_sql = format!("SELECT COUNT(*) FROM threads WHERE (model_provider LIKE 'openai%' OR model_provider='custom' OR model_provider LIKE 'custom_%') AND {selector} AND (model_provider<>?1 OR model<>?2)");
-    let remaining: i64 =
-        transaction.query_row(&verify_sql, params![provider, model], |row| row.get(0))?;
+    let (changed_count, remaining) = if has_reasoning_effort {
+        let sql = format!("UPDATE threads SET model_provider=?1, model=?2, reasoning_effort=?3 WHERE (model_provider LIKE 'openai%' OR model_provider='custom' OR model_provider LIKE 'custom_%') AND {selector}");
+        let changed_count =
+            transaction.execute(&sql, params![provider, model, reasoning_effort])?;
+        let verify_sql = format!("SELECT COUNT(*) FROM threads WHERE (model_provider LIKE 'openai%' OR model_provider='custom' OR model_provider LIKE 'custom_%') AND {selector} AND (model_provider<>?1 OR model<>?2 OR COALESCE(reasoning_effort,'')<>?3)");
+        let remaining = transaction.query_row(
+            &verify_sql,
+            params![provider, model, reasoning_effort],
+            |row| row.get::<_, i64>(0),
+        )?;
+        (changed_count, remaining)
+    } else {
+        let sql = format!("UPDATE threads SET model_provider=?1, model=?2 WHERE (model_provider LIKE 'openai%' OR model_provider='custom' OR model_provider LIKE 'custom_%') AND {selector}");
+        let changed_count = transaction.execute(&sql, params![provider, model])?;
+        let verify_sql = format!("SELECT COUNT(*) FROM threads WHERE (model_provider LIKE 'openai%' OR model_provider='custom' OR model_provider LIKE 'custom_%') AND {selector} AND (model_provider<>?1 OR model<>?2)");
+        let remaining = transaction.query_row(&verify_sql, params![provider, model], |row| {
+            row.get::<_, i64>(0)
+        })?;
+        (changed_count, remaining)
+    };
     if remaining != 0 {
         return Err(ModelayError::Message(
             "旧任务渠道设置验证失败，数据库事务已回滚。".into(),
@@ -157,9 +188,16 @@ mod tests {
         backup_directory: &Path,
         provider: &str,
         model: &str,
+        reasoning_effort: &str,
     ) -> Result<Option<RebindReport>> {
         let backup = backup_at(database_path, backup_directory)?;
-        rebind_prepared_with_timeout(backup.as_ref(), provider, model, Duration::from_secs(10))
+        rebind_prepared_with_timeout(
+            backup.as_ref(),
+            provider,
+            model,
+            reasoning_effort,
+            Duration::from_secs(10),
+        )
     }
 
     #[test]
@@ -167,11 +205,17 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let database = directory.path().join("state.sqlite");
         let connection = Connection::open(&database).unwrap();
-        connection.execute_batch("CREATE TABLE threads(id TEXT PRIMARY KEY, model_provider TEXT NOT NULL, model TEXT, preview TEXT NOT NULL, source TEXT NOT NULL, thread_source TEXT, updated_at INTEGER, updated_at_ms INTEGER); INSERT INTO threads VALUES ('official','openai_http','old','v','vscode','user',1,1000),('third','custom_proxy','old','v','vscode','user',2,2000),('review','openai_http','codex-auto-review','v','{\"subagent\":{}}','subagent',3,3000),('hidden','openai_http','old','','vscode','user',4,4000),('ollama','ollama','local','v','vscode','user',5,5000);").unwrap();
+        connection.execute_batch("CREATE TABLE threads(id TEXT PRIMARY KEY, model_provider TEXT NOT NULL, model TEXT, reasoning_effort TEXT, preview TEXT NOT NULL, source TEXT NOT NULL, thread_source TEXT, updated_at INTEGER, updated_at_ms INTEGER); INSERT INTO threads VALUES ('official','openai_http','old','high','v','vscode','user',1,1000),('third','custom_proxy','old','high','v','vscode','user',2,2000),('review','openai_http','codex-auto-review','high','v','{\"subagent\":{}}','subagent',3,3000),('hidden','openai_http','old','high','','vscode','user',4,4000),('ollama','ollama','local','high','v','vscode','user',5,5000);").unwrap();
         drop(connection);
-        let report = rebind_at(&database, directory.path(), "custom", "gpt-5.6-sol")
-            .unwrap()
-            .unwrap();
+        let report = rebind_at(
+            &database,
+            directory.path(),
+            "custom",
+            "gpt-5.6-sol",
+            "medium",
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(report.changed_count, 2);
         assert!(report.backup_path.exists());
         let backup_connection = Connection::open(&report.backup_path).unwrap();
@@ -195,6 +239,16 @@ mod tests {
                 )
                 .unwrap(),
             "custom"
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT reasoning_effort FROM threads WHERE id='official'",
+                    [],
+                    |r| r.get::<_, String>(0)
+                )
+                .unwrap(),
+            "medium"
         );
         assert_eq!(
             connection
@@ -235,7 +289,7 @@ mod tests {
         let connection = Connection::open(&database).unwrap();
         connection.execute_batch("CREATE TABLE threads(id TEXT PRIMARY KEY, model_provider TEXT NOT NULL, model TEXT, preview TEXT NOT NULL, source TEXT NOT NULL, updated_at INTEGER); INSERT INTO threads VALUES ('user','custom','old','visible','vscode',1),('hidden','openai_http','old','','vscode',2),('review','openai_http','codex-auto-review','visible','subagent',3);").unwrap();
         drop(connection);
-        let report = rebind_at(&database, directory.path(), "openai_http", "gpt-5.5")
+        let report = rebind_at(&database, directory.path(), "openai_http", "gpt-5.5", "low")
             .unwrap()
             .unwrap();
         assert_eq!(report.changed_count, 1);
@@ -277,6 +331,7 @@ mod tests {
             directory.path(),
             "custom",
             "gpt-5.6-sol",
+            "medium",
             Duration::from_millis(30),
         );
         assert!(result.is_err());

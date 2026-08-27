@@ -3,7 +3,52 @@ use crate::error::{ModelayError, Result};
 use crate::models::{ChannelProfile, UsageSnapshot, UsageWindow};
 use chrono::Utc;
 use serde_json::{json, Value};
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
+use std::time::Instant;
+
+const CACHE_TTL: Duration = Duration::from_secs(8);
+
+#[derive(Clone)]
+struct CacheEntry {
+    stored_at: Instant,
+    snapshot: UsageSnapshot,
+}
+
+fn usage_cache() -> &'static Mutex<HashMap<String, CacheEntry>> {
+    static CACHE: OnceLock<Mutex<HashMap<String, CacheEntry>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+pub fn cached(
+    channel_id: &str,
+    fetch: impl FnOnce() -> Result<UsageSnapshot>,
+) -> Result<UsageSnapshot> {
+    let mut cache = usage_cache()
+        .lock()
+        .map_err(|_| ModelayError::Message("额度缓存状态异常。".into()))?;
+    if let Some(entry) = cache.get(channel_id) {
+        if entry.stored_at.elapsed() < CACHE_TTL {
+            return Ok(entry.snapshot.clone());
+        }
+    }
+    let snapshot = fetch()?;
+    cache.insert(
+        channel_id.to_owned(),
+        CacheEntry {
+            stored_at: Instant::now(),
+            snapshot: snapshot.clone(),
+        },
+    );
+    Ok(snapshot)
+}
+
+pub fn clear_cache() {
+    if let Ok(mut cache) = usage_cache().lock() {
+        cache.clear();
+    }
+}
 
 pub fn official() -> Result<UsageSnapshot> {
     let result = codex::rpc(
@@ -282,6 +327,7 @@ mod tests {
     use super::*;
     use std::io::{Read, Write};
     use std::net::TcpListener;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     #[test]
     fn parses_official_single_and_multi_bucket() {
         let value = json!({"rateLimits":{"primary":{"usedPercent":11,"windowDurationMins":300,"resetsAt":1787748781},"secondary":{"usedPercent":38,"windowDurationMins":10080,"resetsAt":1788280440},"planType":"plus","credits":{"balance":"12.5"}}});
@@ -405,6 +451,31 @@ mod tests {
         server.join().unwrap();
         assert!(error.contains("不支持余额查询"));
         assert!(error.contains("HTTP 404"));
+    }
+
+    #[test]
+    fn shared_cache_coalesces_simultaneous_window_refreshes() {
+        static FETCHES: AtomicUsize = AtomicUsize::new(0);
+        let key = format!("cache-test-{:?}", std::thread::current().id());
+        let fetch = || {
+            FETCHES.fetch_add(1, Ordering::SeqCst);
+            Ok(UsageSnapshot {
+                kind: "official".into(),
+                channel_id: "official".into(),
+                plan_name: None,
+                five_hour: None,
+                weekly: None,
+                remaining_balance: None,
+                balance_label: None,
+                credits_balance: None,
+                updated_at: Utc::now().timestamp(),
+            })
+        };
+        let before = FETCHES.load(Ordering::SeqCst);
+        let first = cached(&key, fetch).unwrap();
+        let second = cached(&key, fetch).unwrap();
+        assert_eq!(first.updated_at, second.updated_at);
+        assert_eq!(FETCHES.load(Ordering::SeqCst) - before, 1);
     }
 
     fn local_status_channel(status: u16) -> (ChannelProfile, std::thread::JoinHandle<()>) {
