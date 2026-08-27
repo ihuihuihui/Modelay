@@ -25,6 +25,7 @@ Modelay 采用 Tauri 2 桌面壳、React/TypeScript 界面和 Rust 核心。Rust
 ```toml
 model_provider = "custom_example"
 model = "gpt-5.6-sol"
+model_reasoning_effort = "medium"
 
 [model_providers.custom_example]
 name = "Example Relay"
@@ -41,13 +42,13 @@ supports_websockets = false
 
 ## 切换事务
 
-1. 校验 URL、密钥和模型。
+1. 校验 URL、密钥、模型和该模型支持的推理强度。
 2. 在任何真实写入之前保存配置备份和 SQLite 在线一致性备份，并读取旧环境变量、生图路由和偏好。
 3. 原子写入新配置，设置目标渠道环境变量并更新生图路由；清除所有非目标第三方环境变量。每个 Codex 子进程仍会先清空全部 Provider 密钥再只注入目标渠道，避免诊断和运行串用凭据。
 4. 运行 `codex doctor --json`，解析 `config.load` 与 `auth.credentials`；终端等非关键警告不会误阻断切换。
 5. 验证官方登录/模型，或第三方模型和服务可达性。
 6. 保存新的 Modelay 偏好。
-7. 备份 SQLite，并在 `BEGIN IMMEDIATE` 事务中覆盖任务。
+7. 备份 SQLite，并在 `BEGIN IMMEDIATE` 事务中覆盖任务的 Provider、模型和推理强度。
 8. 返回结构化检查报告和重启提示。
 
 数据库覆盖是最后一个可能失败的持久化步骤。前置步骤失败会恢复配置、全部渠道环境变量、生图路由和偏好；SQLite 自身失败由事务回滚。渠道资料和密钥的增删改也采用补偿事务：偏好、系统凭据与活跃渠道环境变量任一步失败，都会恢复之前状态。补偿动作本身如有失败，会合并进最终错误并要求从备份恢复，不会静默声称回滚完成。
@@ -56,16 +57,19 @@ supports_websockets = false
 
 ## 任务覆盖规则
 
-只匹配 `openai*`、`custom` 和 `custom_*`。当前数据库要求 `thread_source='user'`，并排除空预览、`codex-auto-review` 和 subagent。旧数据库缺少 `thread_source` 时使用可见任务规则。Ollama 等其他 Provider、rollout 和消息历史不修改。
+只匹配 `openai*`、`custom` 和 `custom_*`。当前数据库要求 `thread_source='user'`，并排除空预览、`codex-auto-review` 和 subagent。旧数据库缺少 `thread_source` 时使用可见任务规则；旧表缺少 `reasoning_effort` 时仍完成 Provider 与模型覆盖。Ollama 等其他 Provider、rollout 和消息历史不修改。
 
 ## 模型、额度与胶囊
 
 - 官方模型：Codex app-server `model/list`。
 - 第三方模型：Bearer 认证请求渠道 `modelsPath`。
+- 推理强度：读取官方模型的 `supportedReasoningEfforts`，界面提供即时、快速、平衡、深度、极深和最大档位；第三方未声明能力时保留手动选择。切换事务会把结果写入顶层 `model_reasoning_effort` 和用户任务索引。
 - 官方额度：`account/rateLimits/read`，兼容单桶和多桶响应。存在 `rateLimitsByLimitId.codex` 时明确优先 Codex 桶，避免误用 `base_model_inference` 等同周期额度；界面按 `windowDurationMins` 动态显示 5 小时、15 分钟、1 小时、周额度等真实标签。
 - 第三方余额：兼容 `remaining`、`balance` 和 `quota.remaining`。
 
-Codex 子进程的 stdout/stderr 会在独立线程持续读取，避免输出填满管道后阻塞；命令超时会终止并回收子进程。Doctor 启动时会显式移除所有非目标渠道环境变量，只注入目标渠道密钥；完整输出先按当前密钥、Bearer 认证头、常见 JSON 凭据字段和 `sk-` 形式脱敏，再解析完整 JSON，只有最终展示给用户的错误摘要才受字符上限限制。这样当前包含大量 feature flags、Git 和网络细节的 Doctor 报告不会在解析前被截断。app-server RPC 无论成功、写入失败或超时都会关闭 stdin、终止进程并等待读取线程退出，避免周期性额度和模型请求累积孤儿进程。
+Codex 子进程的 stdout/stderr 会在独立线程持续读取，避免输出填满管道后阻塞；命令超时会终止并回收子进程。Doctor 启动时会显式移除所有非目标渠道环境变量，只注入目标渠道密钥；完整输出先按当前密钥、Bearer 认证头、常见 JSON 凭据字段和 `sk-` 形式脱敏，再解析完整 JSON，只有最终展示给用户的错误摘要才受字符上限限制。这样当前包含大量 feature flags、Git 和网络细节的 Doctor 报告不会在解析前被截断。
+
+官方模型与额度 RPC 复用一个进程级持久 app-server，JSON-RPC 请求使用递增 ID 串行匹配；连接异常时回收旧进程并只重试一次。渠道切换前会关闭旧连接，确保新配置不会复用旧 Provider 状态；Modelay 退出时同步终止子进程并等待读取线程结束。主窗口与额度胶囊另共享 8 秒成功结果缓存，因此两个 10 秒刷新定时器不会重复请求同一份额度。缓存失败不覆盖上次界面数据，切换渠道时立即清空。
 
 第三方服务检查会阻断 401/403 密钥拒绝、429 限流和 5xx 服务故障；404/405 仍可视为主服务可达，适用于未实现模型列表路径且关闭了模型校验的 Responses 中转站。服务错误正文如果回显当前密钥，会在进入错误报告前按完整密钥脱敏。
 
@@ -87,7 +91,7 @@ Windows 使用 Credential Manager、`HKCU\\Environment` 和 `WM_SETTINGCHANGE` �
 
 Rust 单元测试覆盖 TOML 保留、原子覆盖、精确文件快照、Provider/URL、全新安装仅官方渠道、已有 AiLink 渠道升级保留、Doctor、官方/第三方额度、Codex 多额度桶优先级、Provider 动态识别、数据库锁回滚，以及当前/旧版 SQLite 表结构。TypeScript 测试覆盖悬浮窗边缘几何、动态额度周期标签、模型选择和更新错误/进度状态。GitHub Actions 在 Linux 运行这些测试，并在 macOS、Windows 生成应用包；Windows Rust/Win32 源码也使用 `cargo-xwin` 与 Windows CRT/SDK 完成交叉编译检查。
 
-当前自动验证基线为 Rust 26 项单元测试和 TypeScript 13 项悬浮窗/额度标签/模型选择/更新状态测试全部通过；新增 Doctor 大型 pretty JSON、稳定 Keychain service 和进程缓存回归用例。Rust Clippy 全目标零警告、TypeScript 类型检查、Vite 生产构建、npm 生产依赖高危漏洞检查及 `x86_64-pc-windows-msvc` 交叉检查通过。Windows 交叉检查验证 Rust/Win32 源码，Windows runner 已成功生成 `v4.0.0-alpha.5` NSIS 安装器；运行行为仍需 Windows 实机验收。
+当前自动验证基线为 Rust 29 项单元测试和 TypeScript 13 项悬浮窗/额度标签/模型选择/更新状态测试全部通过；新增 Doctor 大型 pretty JSON、稳定 Keychain service、共享额度缓存、推理强度能力校验和任务强度覆盖回归用例。Rust Clippy 全目标零警告、TypeScript 类型检查与 Vite 生产构建通过。Windows runner 负责完整 Windows 编译和 NSIS 安装器生成；运行行为仍需 Windows 实机验收。
 
 `tauri.windows.conf.json` 将 Windows 默认 bundle 设为 NSIS 与 MSI。`scripts/package-windows.ps1` 负责复制安装器并生成 SHA-256 文件；macOS 脚本会自动识别 arm64/x64，优先使用 CI 注入的固定开发签名身份（本地未注入时回退 ad-hoc），然后执行严格签名验证、DMG 验证并生成 SHA-256 文件。两平台安装包统一写入顶层 `artifacts/installers`，不再放进会被 Vite 清空的 `dist` 目录。常规 CI 构建两平台安装包；版本标签发布工作流会校验标签与 `package.json` 版本完全一致，再由官方 Tauri Action 创建 GitHub Release、签名更新包和 `latest.json`。
 
@@ -101,11 +105,11 @@ Updater 已在 Rust 运行时注册，并通过最小权限开放检查、下载
 
 当前 macOS 发布构建已通过固定开发身份的 `.app` 深度签名严格校验、designated requirement 检查和 DMG 完整性校验。自动测试验证全新偏好只包含官方渠道，并验证已有 AiLink 渠道升级后仍作为用户渠道保留。此前在既有用户配置上完成的只读 UI 冒烟覆盖服务端动态模型、实时钱包余额、帮助/设置弹窗、可编辑且不回显旧值的密钥输入框、主窗口关闭后的独立胶囊、点击胶囊不唤起主界面、“靠边隐藏”自动收起、关闭主窗口转入后台、再次启动唤回以及进程数保持单实例；该过程未调用渠道切换、任务覆盖或 ChatGPT 重启。
 
-当前发布测试包（`v4.0.0-alpha.5`）校验值：
+当前发布测试包（`v4.0.0-alpha.6`）校验值：
 
 | 文件 | SHA-256 |
 | --- | --- |
-| `Modelay_4.0.0-alpha.5_aarch64.dmg` | `2194d5141d5b4e4a4381ec333262ce41edf3e397373140698c5912f7490b5070` |
-| `Modelay_4.0.0-alpha.5_x64-setup.exe` | `ba5b02d76028f96e43484428e74f7664674a30a3856f5db1ce9b7c7b4a9d9a06` |
+| `Modelay_4.0.0-alpha.6_aarch64.dmg` | `2a3d2238471539eb8a46a8edc34921910ae4cca983990f059339ce57ac50e9e2` |
+| `Modelay_4.0.0-alpha.6_x64-setup.exe` | `4e65a844fa7f319fb3770931dea79a49538650827965364284010ddeb56932a7` |
 
-免费开发阶段已经启用 Tauri 更新包的独立签名验证，但仍不包含正式 Apple Developer ID/Windows Authenticode 签名。macOS 测试包使用固定自签名开发身份执行深度签名并严格校验，DMG 通过 `hdiutil verify`。公开仓库 `ihuihuihui/Modelay` 已配置发布所需的 GitHub Actions Secrets，`v4.0.0-alpha.5` 的 macOS/Windows 签名更新包与 `latest.json` 已发布并通过公开下载验证；清单中的两平台签名与独立 `.sig` 文件完全一致。私钥不得提交到仓库，也不能在已有安装用户后随意更换，否则旧版本将无法验证后续更新。
+免费开发阶段已经启用 Tauri 更新包的独立签名验证，但仍不包含正式 Apple Developer ID/Windows Authenticode 签名。macOS 测试包使用固定自签名开发身份执行深度签名并严格校验，DMG 通过 `hdiutil verify`。公开仓库 `ihuihuihui/Modelay` 已配置发布所需的 GitHub Actions Secrets，`v4.0.0-alpha.6` 的 macOS/Windows 签名更新包与 `latest.json` 已发布并通过公开下载验证；清单中的两平台签名与独立 `.sig` 文件完全一致。私钥不得提交到仓库，也不能在已有安装用户后随意更换，否则旧版本将无法验证后续更新。
