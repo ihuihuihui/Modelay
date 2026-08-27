@@ -1,6 +1,7 @@
 node_modules
 dist
 artifacts
+output
 src-tauri/target
 .DS_Store
 src-tauri/gen

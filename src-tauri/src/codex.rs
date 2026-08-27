@@ -286,7 +286,7 @@ impl RpcProcess {
             output_reader: Some(output_reader),
             next_id: 2,
         };
-        process.write(&json!({"id":1,"method":"initialize","params":{"clientInfo":{"name":"modelay","title":"Modelay","version":env!("CARGO_PKG_VERSION")},"capabilities":null}}))?;
+        process.write(&json!({"id":1,"method":"initialize","params":{"clientInfo":{"name":"modelay","title":"Modelay","version":env!("CARGO_PKG_VERSION"),"experimentalApi":true},"capabilities":null}}))?;
         process.wait_for(1, Duration::from_secs(20), "initialize")?;
         process.write(&json!({"method":"initialized"}))?;
         Ok(process)
@@ -310,23 +310,6 @@ impl RpcProcess {
                 .recv_timeout(remaining)
                 .map_err(|_| ModelayError::Message(format!("读取 Codex {method} 超时。")))?;
             if value.get("id").and_then(Value::as_i64) == Some(id) {
-                return Ok(value);
-            }
-        }
-    }
-
-    fn wait_for_method(&mut self, method: &str, timeout: Duration) -> Result<Value> {
-        let deadline = Instant::now() + timeout;
-        loop {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return Err(ModelayError::Message(format!("等待 Codex {method} 超时。")));
-            }
-            let value = self
-                .receiver
-                .recv_timeout(remaining)
-                .map_err(|_| ModelayError::Message(format!("等待 Codex {method} 超时。")))?;
-            if value.get("method").and_then(Value::as_str) == Some(method) {
                 return Ok(value);
             }
         }
@@ -363,7 +346,6 @@ pub fn create_handoff_thread(
     cwd: &str,
     provider: &str,
     model: &str,
-    effort: &str,
     environment: &[(&str, Option<&str>)],
 ) -> Result<String> {
     let mut process = RpcProcess::spawn_with_environment(environment)?;
@@ -383,20 +365,27 @@ pub fn create_handoff_thread(
         .and_then(Value::as_str)
         .ok_or_else(|| ModelayError::Message("Codex 未返回新任务 ID。".into()))?
         .to_owned();
+    // Inject the prepared handoff directly into the new thread history instead
+    // of starting a model turn. A background turn keeps the thread owned by this
+    // app-server process and makes Codex report that another application has it
+    // open. Injection is immediate and releases the thread when this process drops.
     process.request(
-        "turn/start",
+        "thread/inject_items",
         json!({
             "threadId": thread_id,
-            "input": [{"type":"text","text":prompt}],
-            "model": model,
-            "effort": effort
+            "items": handoff_items(prompt)
         }),
         Duration::from_secs(30),
     )?;
-    std::thread::spawn(move || {
-        let _ = process.wait_for_method("turn/completed", Duration::from_secs(1800));
-    });
     Ok(thread_id)
+}
+
+fn handoff_items(prompt: String) -> Value {
+    json!([{
+        "type": "message",
+        "role": "user",
+        "content": [{"type": "input_text", "text": prompt}]
+    }])
 }
 
 impl Drop for RpcProcess {
@@ -563,5 +552,14 @@ mod tests {
         assert!(!redacted.contains("bearer-value"));
         assert!(!redacted.contains("json-value"));
         assert!(!redacted.contains("sk-testCredential123"));
+    }
+
+    #[test]
+    fn handoff_injects_a_user_message_without_starting_a_turn() {
+        let items = handoff_items("project handoff".into());
+        assert_eq!(items[0]["type"], "message");
+        assert_eq!(items[0]["role"], "user");
+        assert_eq!(items[0]["content"][0]["type"], "input_text");
+        assert_eq!(items[0]["content"][0]["text"], "project handoff");
     }
 }

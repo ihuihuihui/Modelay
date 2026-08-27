@@ -272,12 +272,13 @@ pub fn restart_chatgpt(environment: &[(String, Option<String>)]) -> Result<()> {
             command.env(key, value);
         }
     }
-    let status = command.status()?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err("无法重新打开 ChatGPT。".into())
-    }
+    // ChatGPT is a long-running GUI process. Waiting for its exit would leave
+    // Modelay's restart action and every global button disabled indefinitely.
+    let mut child = command.spawn()?;
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
 }
 
 #[cfg(target_os = "macos")]

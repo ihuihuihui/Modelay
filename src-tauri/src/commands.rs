@@ -36,7 +36,6 @@ fn create_thread_handoff_inner(request: HandoffRequest) -> Result<HandoffReport>
     let config_document = config::read()?;
     let provider = config::active_provider(&config_document.document);
     let model = config::active_model(&config_document.document);
-    let effort = config::active_reasoning_effort(&config_document.document);
     if model.trim().is_empty() {
         return Err("当前 Codex 配置没有可用模型。".into());
     }
@@ -71,7 +70,6 @@ fn create_thread_handoff_inner(request: HandoffRequest) -> Result<HandoffReport>
         &record.cwd,
         &provider,
         &model,
-        &effort,
         &environment_refs,
     )?;
     Ok(HandoffReport {

@@ -119,7 +119,11 @@ pub fn run() {
             codex::reset_rpc();
         }
         #[cfg(target_os = "macos")]
-        if let tauri::RunEvent::Reopen { .. } = event {
+        if let tauri::RunEvent::Reopen {
+            has_visible_windows: false,
+            ..
+        } = event
+        {
             show_main_window(app);
         }
         #[cfg(not(target_os = "macos"))]

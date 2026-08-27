@@ -55,6 +55,7 @@ function App() {
   const [draft, setDraft] = useState<Draft | null>(null);
   const [report, setReport] = useState<SwitchReport | null>(null);
   const [restartOpen, setRestartOpen] = useState(false);
+  const [switchInProgress, setSwitchInProgress] = useState(false);
   const [switchConfirmOpen, setSwitchConfirmOpen] = useState(false);
   const [usage, setUsage] = useState<UsageSnapshot | null>(null);
   const [usageError, setUsageError] = useState<string | null>(null);
@@ -194,13 +195,15 @@ function App() {
       return;
     }
     setSwitchConfirmOpen(false);
-    setBusy(true); setError(null); setReport(null); setMessage("正在备份、切换并验证真实配置…");
+    setSwitchInProgress(true); setBusy(true); setError(null); setReport(null); setMessage("渠道切换进行中：正在备份、写入并验证配置…");
     try {
       const result = await invoke<SwitchReport>("switch_channel", { request: { channelId: selectedId, model: selectedModel, reasoningEffort: selectedReasoningEffort, sessionScope, threadId: sessionScope === "single" ? threadId.trim() : null } });
-      setReport(result); setRestartOpen(result.needsRestart); setMessage(`已切换为 ${selected.name} / ${selectedModel} / ${reasoningLabels[selectedReasoningEffort] ?? selectedReasoningEffort}`);
+      setReport(result);
       await loadState(); await refreshUsage();
+      setMessage(`渠道配置已完成：${selected.name} / ${selectedModel}，请确认是否立即重启 Codex`);
+      setSwitchInProgress(false); setBusy(false); setRestartOpen(result.needsRestart);
     } catch (reason) { setError(String(reason)); setMessage("切换失败，已尝试恢复原配置"); }
-    finally { setBusy(false); }
+    finally { setSwitchInProgress(false); setBusy(false); }
   }
 
   async function saveChannel() {
@@ -303,7 +306,7 @@ function App() {
     try {
       const result = await invoke<HandoffReport>("create_thread_handoff", { request: { threadId: threadHealth.threadId } });
       setHandoffReport(result);
-      setMessage(`续接任务 ${result.newThreadId} 已创建，正在当前渠道中整理并继续`);
+      setMessage(`续接任务 ${result.newThreadId} 已创建，交接摘要已写入且不会占用会话`);
     } catch (reason) { setError(String(reason)); setMessage("续接任务创建失败，旧任务未受影响"); }
     finally { setHandoffBusy(false); }
   }
@@ -346,7 +349,7 @@ function App() {
         <div className="handoff-workflow"><div className="panel-head"><div><h2>会话续接助手</h2><p>检查上下文风险，并将当天项目资料、最新需求与进度交接到全新任务</p></div><Activity size={20} className={threadHealth?.riskLevel === "critical" ? "risk-critical" : threadHealth?.riskLevel === "warning" ? "orange" : "green"} /></div>
           <div className="handoff-input"><label htmlFor="handoff-thread-id">会话 ID</label><div><input id="handoff-thread-id" value={handoffThreadId} onChange={(event) => { setHandoffThreadId(event.target.value); setThreadHealth(null); setHandoffReport(null); }} placeholder="例如 01a041f4-ef73-7560-b418-c930ab8b6af0" spellCheck={false} /><button className="ghost-btn" onClick={() => void inspectThread()} disabled={handoffBusy}>{handoffBusy && !threadHealth ? <RefreshCw size={14} className="spin" /> : <Activity size={14} />}检查会话</button></div></div>
           {threadHealth && <div className={`thread-health ${threadHealth.riskLevel}`} role="status"><div className="health-head"><span>{threadHealth.riskLabel}</span><strong>{formatTokens(threadHealth.tokensUsed)} tokens</strong></div><h3>{threadHealth.title || threadHealth.threadId}</h3><p>{threadHealth.cwd}</p><div className="health-stats"><span>当天消息 <b>{threadHealth.todayMessageCount}</b></span><span>记录体积 <b>{formatBytes(threadHealth.todayRolloutBytes)}</b></span><span>{threadHealth.providerId} · {threadHealth.model} · {reasoningLabels[threadHealth.reasoningEffort] ?? threadHealth.reasoningEffort}</span></div><ul>{threadHealth.riskReasons.map((reason) => <li key={reason}>{reason}</li>)}</ul>{threadHealth.latestUserRequest && <div className="latest-request"><span>最新需求</span><p>{threadHealth.latestUserRequest}</p></div>}<button className="primary-btn handoff-action" onClick={() => void createHandoff()} disabled={handoffBusy}>{handoffBusy ? <RefreshCw size={15} className="spin" /> : <ArrowRight size={15} />}整理并创建续接任务</button></div>}
-          {handoffReport && <div className="handoff-success" role="status"><Check size={18} /><div><strong>新任务已创建并开始交接</strong><span>{handoffReport.newThreadId}</span><small>已提取当天 {handoffReport.messageCount} 条消息和 {handoffReport.referencedPaths.length} 个引用路径；旧任务保持不变。</small></div><button className="mini-btn" aria-label="复制新任务 ID" title="复制新任务 ID" onClick={() => void navigator.clipboard.writeText(handoffReport.newThreadId)}><Copy size={14} /></button></div>}
+          {handoffReport && <div className="handoff-success" role="status"><Check size={18} /><div><strong>新任务与交接摘要已创建</strong><span>{handoffReport.newThreadId}</span><small>已提取当天 {handoffReport.messageCount} 条消息和 {handoffReport.referencedPaths.length} 个引用路径；不会后台运行模型或占用新会话。若 Codex 任务列表尚未刷新，可重启 Codex 后直接打开。</small></div><button className="mini-btn" aria-label="复制新任务 ID" title="复制新任务 ID" onClick={() => void navigator.clipboard.writeText(handoffReport.newThreadId)}><Copy size={14} /></button></div>}
         </div>
         <aside className="handoff-guide"><div className="guide-title"><FileText size={17} /><div><strong>什么时候需要续接？</strong><span>以下情况可能表现为长时间思考、重新连接或请求失败</span></div></div><div className="guide-list"><div><b>上下文累计过大</b><span>长期项目、频繁工具调用、图片与大型输出会增加恢复和压缩成本。</span></div><div><b>单次请求载荷过大</b><span>历史与新消息合并后可能触发 413、超时或服务端主动断开。</span></div><div><b>渠道或网络不稳定</b><span>第三方首字节慢、限流、模型排队或重启后凭据未生效都会触发重试。</span></div><div><b>模型深度过高</b><span>高、极深或最大推理会显著延长首个响应时间，长任务更容易碰到连接窗口。</span></div></div><div className="guide-solution"><strong>推荐解决方案</strong><span>先检查会话；风险较高时创建续接任务。Modelay 只传递当天精简交接，不复制完整历史，并要求新任务先核对工作区和现有文件。</span></div></aside>
       </section>
@@ -364,6 +367,8 @@ function App() {
     {confirmSecretDelete && draft && <div className="modal-backdrop nested-modal"><div className="modal confirm-modal"><div className="restart-icon danger-icon"><KeyRound size={21} /></div><h2>删除 {draft.name} 的密钥？</h2><p>删除后该渠道将无法查询模型、余额或执行切换，直到重新保存密钥。</p><div className="modal-actions"><button className="ghost-btn" onClick={() => setConfirmSecretDelete(false)}>取消</button><button className="danger-btn" onClick={() => void deleteSecret()} disabled={busy}>确认删除密钥</button></div></div></div>}
 
     {switchConfirmOpen && <div className="modal-backdrop"><div className="modal switch-confirm-modal"><div className="restart-icon"><Wifi size={21} /></div><h2>{isCurrent ? `重新应用 ${selected.name}？` : `启用 ${selected.name}？`}</h2><p>确认后将切换全局 Codex 配置，并更新所选范围内的旧任务。</p><div className="switch-summary"><div><span>目标模型</span><strong>{selectedModel}</strong></div><div><span>推理强度</span><strong>{reasoningLabels[selectedReasoningEffort] ?? selectedReasoningEffort}</strong></div><div><span>旧任务范围</span><strong>{sessionScope === "single" ? threadId.trim() : sessionScopeLabels[sessionScope]}</strong></div></div><div className="modal-actions"><button className="ghost-btn" onClick={() => setSwitchConfirmOpen(false)}>取消</button><button className="primary-btn" onClick={() => void switchChannel()} disabled={!canSwitch}>{busy ? <RefreshCw size={15} className="spin" /> : <Wifi size={15} />}确认启用</button></div></div></div>}
+
+    {switchInProgress && <div className="modal-backdrop operation-backdrop"><div className="modal operation-modal" role="status" aria-live="polite"><div className="operation-spinner"><RefreshCw size={24} className="spin" /></div><h2>正在切换到 {selected.name}</h2><p>Modelay 正在依次备份配置、验证模型与服务、更新任务索引。完成前渠道尚未完全生效，请不要关闭软件。</p><div className="operation-steps"><span><Check size={13} />已确认目标渠道与模型</span><span><RefreshCw size={13} className="spin" />正在写入、验证并生成回滚备份</span><span>完成后将立即显示“重启 Codex”确认</span></div></div></div>}
 
     {restartOpen && <div className="modal-backdrop"><div className="modal restart-modal"><div className="restart-icon"><RefreshCw size={22} /></div><h2>渠道已成功启用</h2><p>配置、诊断和所选任务更新已经完成。需要重启 ChatGPT/Codex 才能让新渠道完整生效；立即重启会中断仍在运行的任务。</p><div className="modal-actions"><button className="ghost-btn" onClick={() => { setRestartOpen(false); setMessage("配置已生效，请稍后手动重启 ChatGPT/Codex"); }}>稍后手动重启</button><button className="primary-btn" onClick={() => void restartNow()}>立即重启 Codex</button></div></div></div>}
     {updateOpen && updateVersion && <div className="modal-backdrop"><div className="modal update-modal"><div className="restart-icon"><Download size={22} /></div><h2>Modelay {updateVersion} 可用</h2><p>当前版本 {appVersion}。更新包会先验证 Modelay 的数字签名，验证失败将拒绝安装。</p>{updateNotes && <div className="release-notes">{updateNotes}</div>}{updatePhase === "downloading" || updatePhase === "installing" ? <div className="modal-update-progress"><div><i style={{ width: `${updateProgress ?? 12}%` }} /></div><span>{updateMessage}{updateProgress !== null ? ` · ${updateProgress}%` : ""}</span></div> : <div className="update-warning"><AlertTriangle size={15} /><span>安装完成后 Modelay 会自动重启，请先结束正在执行的重要操作。</span></div>}<div className="modal-actions"><button className="ghost-btn" onClick={() => setUpdateOpen(false)} disabled={updatePhase === "downloading" || updatePhase === "installing"}>稍后提醒</button><button className="primary-btn" onClick={() => void installUpdate()} disabled={updatePhase === "downloading" || updatePhase === "installing"}>{updatePhase === "downloading" || updatePhase === "installing" ? <RefreshCw size={15} className="spin" /> : <Download size={15} />}立即更新并重启</button></div></div></div>}

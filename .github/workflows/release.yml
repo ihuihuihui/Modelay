@@ -89,7 +89,7 @@ jobs:
         with:
           tagName: v__VERSION__
           releaseName: "Modelay v__VERSION__"
-          releaseBody: "Modelay 4.0 Beta 1 adds conversation health warnings and one-click task handoff, a smaller quota capsule, unified branding, a transparent monochrome tray icon, and clearer runtime status. Existing channels and old tasks remain unchanged during upgrades. Signed in-app updates are supported."
+          releaseBody: "Modelay 4.0 Beta 2 fixes task handoff locking by injecting the prepared summary without starting a background model turn, makes ChatGPT restart non-blocking, adds a visible channel-switch progress state, prevents quota-capsule clicks from opening the main window, shortens and slightly raises the capsule, and introduces a refined dark-spark Modelay icon. Existing channels and old tasks remain unchanged during upgrades."
           releaseDraft: false
           prerelease: false
           uploadUpdaterJson: true
