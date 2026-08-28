@@ -450,9 +450,9 @@ pub fn restart_chatgpt(environment: &[(String, Option<String>)]) -> Result<()> {
     let launch_target = windows_chatgpt_launch_target()?;
     let _ = Command::new("taskkill")
         .creation_flags(CREATE_NO_WINDOW)
-        .args(["/IM", "ChatGPT.exe", "/F"])
+        .args(["/IM", "ChatGPT.exe", "/T", "/F"])
         .status();
-    std::thread::sleep(std::time::Duration::from_millis(1200));
+    std::thread::sleep(std::time::Duration::from_millis(1800));
     match launch_target {
         WindowsLaunchTarget::Executable(executable) => {
             let mut command = Command::new(executable);
@@ -509,15 +509,17 @@ enum WindowsLaunchTarget {
 
 #[cfg(target_os = "windows")]
 fn windows_chatgpt_launch_target() -> Result<WindowsLaunchTarget> {
+    // Store/MSIX installs must be launched through their AppID. Starting the
+    // executable directly can fail with Access Denied after taskkill.
+    if let Some(app_id) = powershell_line(
+        "Get-StartApps | Where-Object { $_.Name -eq 'ChatGPT' } | Select-Object -First 1 -ExpandProperty AppID",
+    ) {
+        return Ok(WindowsLaunchTarget::AppId(app_id));
+    }
     if let Some(path) = chatgpt_candidates().into_iter().find(|path| path.is_file()) {
         return Ok(WindowsLaunchTarget::Executable(path));
     }
-    let app_id = powershell_line(
-        "Get-StartApps | Where-Object { $_.Name -eq 'ChatGPT' } | Select-Object -First 1 -ExpandProperty AppID",
-    );
-    app_id
-        .map(WindowsLaunchTarget::AppId)
-        .ok_or_else(|| ModelayError::Message("找不到 ChatGPT.exe 或 Windows 应用 ID。".into()))
+    Err(ModelayError::Message("找不到 ChatGPT.exe 或 Windows 应用 ID。".into()))
 }
 
 #[cfg(target_os = "windows")]

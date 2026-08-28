@@ -48,6 +48,30 @@ button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px s
 .compatibility-note { display: flex; align-items: center; gap: 6px; margin-top: 9px; color: #8eddbd; font-size: 9px; line-height: 1.45; }.scope-options button:disabled { cursor: not-allowed; opacity: .55; }.scope-options button.active:disabled { opacity: 1; }
 .operation-backdrop { z-index: 80; cursor: wait; }.operation-modal { width: min(430px, 100%); text-align: center; }.operation-spinner { width: 48px; height: 48px; margin: 0 auto 14px; display: grid; place-items: center; border: 1px solid #35564a; border-radius: 50%; color: #6fe0b2; background: #142821; }.operation-modal > p { max-width: 350px; margin-right: auto; margin-left: auto; }.operation-steps { display: grid; gap: 8px; margin-top: 16px; padding: 12px; border: 1px solid #304149; border-radius: 10px; color: #8fa4aa; background: #101a20; font-size: 9px; text-align: left; }.operation-steps span { display: flex; align-items: center; gap: 7px; }.operation-steps span:first-child { color: #75dcb5; }
 @media (max-width: 980px) { .handoff-panel { grid-template-columns: 1fr; }.handoff-guide { border-top: 1px solid #26343d; border-left: 0; } }
+
+/* Light theme overrides. Widget surfaces intentionally remain dark for readability. */
+.theme-light { color: #17242b; background: #f4f7f7; }
+.theme-light .topbar { border-color: #d7e1e2; background: rgba(255, 255, 255, .86); }
+.theme-light .brand-sub, .theme-light .eyebrow, .theme-light .hero-detail,
+.theme-light .panel-head p, .theme-light .channel-info span, .theme-light .muted,
+.theme-light .bottom-item span, .theme-light .platform, .theme-light .text-btn,
+.theme-light .info-list span, .theme-light .modal p { color: #63757c; }
+.theme-light .icon-btn { color: #52666d; }.theme-light .icon-btn:hover { color: #17242b; background: #e5eeee; }
+.theme-light .panel { border-color: #d6e1e2; background: #fff; box-shadow: 0 14px 35px rgba(47, 73, 77, .08); }
+.theme-light .channel-card:hover { background: #eef6f4; }.theme-light .channel-card.selected { background: #e6f5ef; outline-color: #83c9ac; }
+.theme-light .model-tag, .theme-light .capsule-preview, .theme-light .real-usage,
+.theme-light .info-list > div, .theme-light .operation-steps, .theme-light .switch-summary > div,
+.theme-light .modal input:not([type="checkbox"]), .theme-light .modal select,
+.theme-light .model-picker select, .theme-light .reasoning-picker select,
+.theme-light .task-scope-picker input { color: #213239; border-color: #c8d7d9; background: #f5f9f9; }
+.theme-light .check-row, .theme-light .bottom-item + .bottom-item { border-color: #dbe5e6; }
+.theme-light .ghost-btn { color: #42616a; border-color: #bfd0d2; background: #edf4f4; }
+.theme-light .modal { border-color: #cbdadc; background: #fff; box-shadow: 0 25px 70px rgba(24, 48, 54, .2); }
+.theme-light .info-modal .modal-head { background: #fff; }
+.theme-light .modal-backdrop { background: rgba(24, 44, 48, .3); }
+.theme-light .release-overview section, .theme-light .update-release-details section { border-color: #d2dfe0; background: #f7fafa; }
+.theme-light .release-overview p, .theme-light .release-overview ul,
+.theme-light .update-release-details span { color: #62777d; }
 .info-modal { max-height: min(680px, calc(100vh - 48px)); overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
 .info-modal .modal-head { position: sticky; top: -23px; z-index: 2; margin: -23px -23px 19px; padding: 23px 23px 19px; background: #152129; }
 .beta-badge { display: inline-flex; align-items: center; vertical-align: middle; margin-left: 5px; padding: 2px 6px; border: 1px solid #765b32; border-radius: 999px; color: #e1b274; background: #2d2519; font-size: 8px; font-weight: 750; letter-spacing: .03em; }

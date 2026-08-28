@@ -14,6 +14,7 @@ pub struct RebindReport {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RebindScope {
+    None,
     Recent(usize),
     All,
     Single(String),
@@ -22,6 +23,7 @@ pub enum RebindScope {
 impl RebindScope {
     pub fn label(&self) -> String {
         match self {
+            Self::None => "不修改旧任务".into(),
             Self::Recent(limit) => format!("最近活动的 {limit} 个任务"),
             Self::All => "全部旧任务".into(),
             Self::Single(thread_id) => format!("指定任务 {thread_id}"),
@@ -137,6 +139,9 @@ fn rebind_prepared_with_timeout(
     let Some(backup) = backup else {
         return Ok(None);
     };
+    if matches!(scope, RebindScope::None) {
+        return Ok(None);
+    }
     let mut connection = Connection::open(&backup.database_path)?;
     connection.busy_timeout(busy_timeout)?;
     validate_schema(&connection)?;
@@ -168,6 +173,7 @@ fn rebind_prepared_with_timeout(
             )
         }
         RebindScope::Single(_) => format!("id=:thread_id AND {candidates}"),
+        RebindScope::None => "0".into(),
     };
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let (changed_count, remaining) = if has_reasoning_effort {

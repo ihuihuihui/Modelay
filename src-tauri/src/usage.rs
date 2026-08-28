@@ -60,48 +60,54 @@ pub fn official() -> Result<UsageSnapshot> {
 }
 
 pub fn channel(channel: &ChannelProfile, secret: &str) -> Result<UsageSnapshot> {
-    if channel.usage_path.trim().is_empty() {
-        return Err(ModelayError::Message(format!(
-            "{} 不支持余额查询：未配置余额接口。",
-            channel.name
-        )));
-    }
-    let endpoint = channel
-        .endpoint(&channel.usage_path)
-        .ok_or_else(|| ModelayError::Message(format!("{} 余额地址无效。", channel.name)))?;
-    let response = reqwest::blocking::Client::builder()
+    let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(15))
-        .build()?
-        .get(endpoint)
-        .bearer_auth(secret)
-        .header("Accept", "application/json")
-        .send()?;
-    let status = response.status();
-    if matches!(status.as_u16(), 404 | 405) {
-        return Err(ModelayError::Message(format!(
-            "{} 不支持余额查询（HTTP {}）。",
-            channel.name,
-            status.as_u16()
-        )));
+        .build()?;
+    let configured = channel.usage_path.trim();
+    let paths: Vec<&str> = if configured.is_empty() {
+        vec!["/v1/usage", "/usage", "/v1/quota", "/quota", "/v1/account/usage"]
+    } else {
+        vec![configured]
+    };
+    let mut last_not_found = None;
+    for path in paths {
+        let endpoint = channel
+            .endpoint(path)
+            .ok_or_else(|| ModelayError::Message(format!("{} 余额地址无效。", channel.name)))?;
+        let response = client
+            .get(endpoint)
+            .bearer_auth(secret)
+            .header("Accept", "application/json")
+            .send()?;
+        let status = response.status();
+        if matches!(status.as_u16(), 404 | 405) {
+            last_not_found = Some(status.as_u16());
+            continue;
+        }
+        let data: Value = response
+            .json()
+            .map_err(|_| ModelayError::Message(format!("{} 余额响应不是有效 JSON。", channel.name)))?;
+        if !status.is_success() {
+            let detail = data
+                .get("message")
+                .or_else(|| data.pointer("/error/message"))
+                .and_then(Value::as_str)
+                .unwrap_or("未知错误");
+            let detail = detail.replace(secret, "<已隐藏>");
+            return Err(ModelayError::Message(format!(
+                "{} 余额查询失败（HTTP {}）：{}",
+                channel.name,
+                status.as_u16(),
+                detail
+            )));
+        }
+        return parse_channel(&channel.id, &data);
     }
-    let data: Value = response
-        .json()
-        .map_err(|_| ModelayError::Message(format!("{} 余额响应不是有效 JSON。", channel.name)))?;
-    if !status.is_success() {
-        let detail = data
-            .get("message")
-            .or_else(|| data.pointer("/error/message"))
-            .and_then(Value::as_str)
-            .unwrap_or("未知错误");
-        let detail = detail.replace(secret, "<已隐藏>");
-        return Err(ModelayError::Message(format!(
-            "{} 余额查询失败（HTTP {}）：{}",
-            channel.name,
-            status.as_u16(),
-            detail
-        )));
-    }
-    parse_channel(&channel.id, &data)
+    Err(ModelayError::Message(format!(
+        "{} 不支持余额查询：未找到余额接口（已自动尝试常见路径，最后 HTTP {}）。",
+        channel.name,
+        last_not_found.unwrap_or(404)
+    )))
 }
 
 fn parse_official(result: &Value) -> Result<UsageSnapshot> {

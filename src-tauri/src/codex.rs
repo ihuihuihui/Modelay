@@ -36,6 +36,11 @@ pub fn run_with_environment(
         .args(arguments)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000);
+    }
     platform::clear_provider_environment(&mut command);
     for (key, value) in environment {
         command.env_remove(key);
@@ -294,6 +299,11 @@ impl RpcProcess {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x0800_0000);
+        }
         platform::clear_provider_environment(&mut command);
         for (key, value) in environment {
             command.env_remove(key);

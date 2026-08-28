@@ -695,7 +695,11 @@ fn switch_inner(request: SwitchRequest) -> Result<SwitchReport> {
         } else {
             checks.push(CheckResult {
                 title: session_scope_label.clone(),
-                detail: "未找到任务索引；新任务仍使用当前渠道".into(),
+                detail: if matches!(session_scope, sessions::RebindScope::None) {
+                    "跨渠道切换不会改写旧任务；原渠道会话仍保留，新任务使用当前渠道".into()
+                } else {
+                    "未找到任务索引；新任务仍使用当前渠道".into()
+                },
                 state: CheckState::Warning,
             });
         }
@@ -710,6 +714,7 @@ fn switch_inner(request: SwitchRequest) -> Result<SwitchReport> {
             model: model.into(),
             reasoning_effort: reasoning_effort.into(),
             session_scope: match session_scope {
+                sessions::RebindScope::None => "none",
                 sessions::RebindScope::Recent(_) => "recent5",
                 sessions::RebindScope::All => "all",
                 sessions::RebindScope::Single(_) => "single",
@@ -983,7 +988,9 @@ fn resolve_session_scope(
     thread_id: Option<&str>,
 ) -> Result<sessions::RebindScope> {
     if current_provider != target_provider {
-        return Ok(sessions::RebindScope::All);
+        // Keep conversations attached to their original provider. Rewriting
+        // every thread made the previous channel disappear from Codex's list.
+        return Ok(sessions::RebindScope::None);
     }
     parse_session_scope(requested, thread_id)
 }
@@ -1053,7 +1060,7 @@ mod tests {
     fn forces_all_tasks_when_switching_providers() {
         assert_eq!(
             resolve_session_scope("openai_http", "custom_proxy", "single", None).unwrap(),
-            sessions::RebindScope::All
+            sessions::RebindScope::None
         );
         assert_eq!(
             resolve_session_scope("custom_proxy", "custom_proxy", "recent5", None).unwrap(),
