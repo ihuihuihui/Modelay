@@ -146,7 +146,10 @@ pub fn set_user_environment(key: &str, value: Option<&str>) -> Result<()> {
 
 #[cfg(target_os = "windows")]
 pub fn get_user_environment(key: &str) -> Result<Option<String>> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     let output = Command::new("reg")
+        .creation_flags(CREATE_NO_WINDOW)
         .args(["query", r"HKCU\Environment", "/v", key])
         .output()?;
     if !output.status.success() {
@@ -165,8 +168,11 @@ pub fn get_user_environment(key: &str) -> Result<Option<String>> {
 
 #[cfg(target_os = "windows")]
 pub fn set_user_environment(key: &str, value: Option<&str>) -> Result<()> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     let output = match value {
         Some(value) => Command::new("reg")
+            .creation_flags(CREATE_NO_WINDOW)
             .args([
                 "add",
                 r"HKCU\Environment",
@@ -180,6 +186,7 @@ pub fn set_user_environment(key: &str, value: Option<&str>) -> Result<()> {
             ])
             .output()?,
         None => Command::new("reg")
+            .creation_flags(CREATE_NO_WINDOW)
             .args(["delete", r"HKCU\Environment", "/v", key, "/f"])
             .output()?,
     };
@@ -301,14 +308,18 @@ fn collect_descendants(parent: i32, result: &mut Vec<i32>) {
 
 #[cfg(target_os = "windows")]
 pub fn restart_chatgpt(environment: &[(String, Option<String>)]) -> Result<()> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     let launch_target = windows_chatgpt_launch_target()?;
     let _ = Command::new("taskkill")
+        .creation_flags(CREATE_NO_WINDOW)
         .args(["/IM", "ChatGPT.exe", "/F"])
         .status();
     std::thread::sleep(std::time::Duration::from_millis(1200));
     match launch_target {
         WindowsLaunchTarget::Executable(executable) => {
             let mut command = Command::new(executable);
+            command.creation_flags(CREATE_NO_WINDOW);
             clear_provider_environment(&mut command);
             for (key, value) in environment {
                 command.env_remove(key);
@@ -320,6 +331,7 @@ pub fn restart_chatgpt(environment: &[(String, Option<String>)]) -> Result<()> {
         }
         WindowsLaunchTarget::AppId(app_id) => {
             let status = Command::new("explorer.exe")
+                .creation_flags(CREATE_NO_WINDOW)
                 .arg(format!(r"shell:AppsFolder\{app_id}"))
                 .status()?;
             if !status.success() {
@@ -390,7 +402,10 @@ fn windows_chatgpt_package_location() -> Option<PathBuf> {
 
 #[cfg(target_os = "windows")]
 fn powershell_line(script: &str) -> Option<String> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     let output = Command::new("powershell.exe")
+        .creation_flags(CREATE_NO_WINDOW)
         .args(["-NoProfile", "-NonInteractive", "-Command", script])
         .output()
         .ok()?;
@@ -408,7 +423,13 @@ pub fn open_folder(path: &Path) -> Result<()> {
     #[cfg(target_os = "macos")]
     let status = Command::new("/usr/bin/open").arg(path).status()?;
     #[cfg(target_os = "windows")]
-    let status = Command::new("explorer").arg(path).status()?;
+    let status = {
+        use std::os::windows::process::CommandExt;
+        Command::new("explorer")
+            .creation_flags(0x0800_0000)
+            .arg(path)
+            .status()?
+    };
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let status = Command::new("xdg-open").arg(path).status()?;
     if status.success() {
