@@ -1,6 +1,11 @@
 export const currentReleaseInfo = {
-  summary: "Beta 13 绕开 WindowsApps 权限陷阱，已登录的官方账号也能直接被认出来。",
+  summary: "Beta 14 补齐 Windows 用户态 Codex 路径，解决已安装仍提示找不到命令行组件。",
   changes: [
+    "识别 Codex Windows 应用迁移到用户目录并按版本哈希存放的可执行文件。",
+    "识别 Codex 独立安装器的版本目录，以及 npm 安装生成的 codex.cmd 命令入口。",
+    "自动忽略尚未完成的 .staging 临时目录，优先使用最近更新的完整 Codex 版本。",
+    "Store 包内 app/resources/codex.exe 只作为末级候选，并继续跳过 WindowsApps 拒绝访问的文件。",
+    "检测仍失败时给出 CODEX_CLI_PATH 的明确恢复方式，不再把渠道问题与组件问题混在一起。",
     "续接消息写入成功后，不再被停止轮次的非关键错误误判为失败。",
     "续接首轮沿用新任务已经确认的模型配置，提升第三方渠道兼容性。",
     "续接失败时在功能区域直接显示真实原因和下一步处理建议。",

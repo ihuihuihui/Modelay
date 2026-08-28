@@ -71,38 +71,31 @@ pub fn codex_executable() -> Result<PathBuf> {
     }
     #[cfg(target_os = "windows")]
     {
-        // Let Windows resolve App Execution Aliases before inspecting package
-        // directories. Store installations commonly expose a runnable alias
-        // while the real WindowsApps binary remains ACL-protected.
-        candidates.push(PathBuf::from("codex.exe"));
+        // An explicit override is authoritative. Prefer user-local relocated
+        // binaries next: Windows Store package files are commonly protected by
+        // ACLs and cannot be launched by an unrelated desktop process.
         if let Some(path) = std::env::var_os("CODEX_CLI_PATH") {
             candidates.push(PathBuf::from(path));
         }
-        // Prefer a user-installed/explicit PATH Codex first. The Microsoft Store
-        // ChatGPT process often lives under WindowsApps and its bundled binary
-        // can be unreadable to a normal desktop process (ERROR_ACCESS_DENIED).
+        append_windows_user_codex_candidates(
+            &mut candidates,
+            std::env::var_os("LOCALAPPDATA").as_deref().map(Path::new),
+            dirs::home_dir().as_deref(),
+            std::env::var_os("APPDATA").as_deref().map(Path::new),
+        );
+        // Prefer a user-installed PATH Codex before package directories. Check
+        // both the native executable and npm's Windows command shim.
         if let Some(paths) = std::env::var_os("PATH") {
             for directory in std::env::split_paths(&paths) {
                 candidates.push(directory.join("codex.exe"));
+                candidates.push(directory.join("codex.cmd"));
             }
         }
-        if let Some(path) = windows_command_path("codex.exe") {
-            candidates.push(path);
-        }
-        if let Some(path) = windows_command_path("codex") {
-            candidates.push(path);
-        }
-        if let Ok(local) = std::env::var("LOCALAPPDATA") {
-            candidates.push(PathBuf::from(&local).join("Programs/Codex/codex.exe"));
-            candidates.push(PathBuf::from(&local).join("Programs/Codex/resources/codex.exe"));
-            candidates.push(PathBuf::from(&local).join("Programs/OpenAI/Codex/codex.exe"));
-            candidates
-                .push(PathBuf::from(&local).join("Programs/OpenAI/Codex/resources/codex.exe"));
-            candidates.push(PathBuf::from(&local).join("OpenAI/Codex/resources/codex.exe"));
-        }
-        if let Ok(appdata) = std::env::var("APPDATA") {
-            candidates.push(PathBuf::from(&appdata).join("npm/codex.exe"));
-        }
+        candidates.extend(windows_command_paths("codex.exe"));
+        candidates.extend(windows_command_paths("codex.cmd"));
+        // Finally let Windows resolve the App Execution Alias. A Store package
+        // may expose this even when its real WindowsApps path is inaccessible.
+        candidates.push(PathBuf::from("codex.exe"));
         if let Some(path) = running_windows_process_path("ChatGPT.exe") {
             if let Some(directory) = path.parent() {
                 candidates.push(directory.join("resources/codex.exe"));
@@ -115,15 +108,12 @@ pub fn codex_executable() -> Result<PathBuf> {
                 candidates.push(directory.join("Resources/codex.exe"));
             }
         }
-        if let Ok(local) = std::env::var("LOCALAPPDATA") {
-            candidates
-                .push(PathBuf::from(&local).join("Programs/OpenAI/ChatGPT/resources/codex.exe"));
-            candidates.push(PathBuf::from(&local).join("OpenAI/ChatGPT/resources/codex.exe"));
-        }
         if let Some(location) = windows_chatgpt_package_location() {
             candidates.push(location.join("codex.exe"));
             candidates.push(location.join("resources/codex.exe"));
             candidates.push(location.join("Resources/codex.exe"));
+            candidates.push(location.join("app/resources/codex.exe"));
+            candidates.push(location.join("app/Resources/codex.exe"));
         }
     }
     #[cfg(not(target_os = "windows"))]
@@ -140,8 +130,67 @@ pub fn codex_executable() -> Result<PathBuf> {
     #[cfg(not(target_os = "windows"))]
     let runnable = candidates.into_iter().find(|path| path.is_file());
     runnable.ok_or_else(|| {
-        ModelayError::Message("找不到 Codex 命令行组件，请确认 ChatGPT/Codex 已安装。".into())
+        #[cfg(target_os = "windows")]
+        let message = "找不到可运行的 Codex 命令行组件。请先启动一次 Codex Windows 应用；仍失败时，请安装独立 Codex CLI，或把可运行的 codex.exe 完整路径写入用户环境变量 CODEX_CLI_PATH，然后彻底退出并重开 Modelay。";
+        #[cfg(not(target_os = "windows"))]
+        let message = "找不到 Codex 命令行组件，请确认 ChatGPT/Codex 已安装。";
+        ModelayError::Message(
+            message.into(),
+        )
     })
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn append_windows_user_codex_candidates(
+    candidates: &mut Vec<PathBuf>,
+    local_app_data: Option<&Path>,
+    home: Option<&Path>,
+    app_data: Option<&Path>,
+) {
+    if let Some(local) = local_app_data {
+        let user_bin = local.join("OpenAI/Codex/bin");
+        candidates.push(user_bin.join("codex.exe"));
+        append_child_candidates(candidates, &user_bin, Path::new("codex.exe"));
+        candidates.push(local.join("Microsoft/WindowsApps/codex.exe"));
+        candidates.push(local.join("Programs/Codex/codex.exe"));
+        candidates.push(local.join("Programs/Codex/resources/codex.exe"));
+        candidates.push(local.join("Programs/OpenAI/Codex/codex.exe"));
+        candidates.push(local.join("Programs/OpenAI/Codex/resources/codex.exe"));
+        candidates.push(local.join("OpenAI/Codex/resources/codex.exe"));
+        candidates.push(local.join("Programs/OpenAI/ChatGPT/resources/codex.exe"));
+        candidates.push(local.join("OpenAI/ChatGPT/resources/codex.exe"));
+    }
+    if let Some(home) = home {
+        append_child_candidates(
+            candidates,
+            &home.join(".codex/packages/standalone/releases"),
+            Path::new("bin/codex.exe"),
+        );
+    }
+    if let Some(app_data) = app_data {
+        candidates.push(app_data.join("npm/codex.exe"));
+        candidates.push(app_data.join("npm/codex.cmd"));
+    }
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn append_child_candidates(candidates: &mut Vec<PathBuf>, root: &Path, suffix: &Path) {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
+    let mut matches = entries
+        .filter_map(std::result::Result::ok)
+        .filter(|entry| !entry.file_name().to_string_lossy().starts_with(".staging-"))
+        .map(|entry| entry.path().join(suffix))
+        .filter(|path| path.is_file())
+        .collect::<Vec<_>>();
+    matches.sort_by_key(|path| {
+        std::fs::metadata(path)
+            .and_then(|metadata| metadata.modified())
+            .ok()
+    });
+    matches.reverse();
+    candidates.extend(matches);
 }
 
 #[cfg(target_os = "windows")]
@@ -179,11 +228,13 @@ fn windows_codex_is_runnable(path: &Path) -> bool {
 }
 
 #[cfg(target_os = "windows")]
-fn windows_command_path(command: &str) -> Option<PathBuf> {
-    powershell_line(&format!(
-        "(Get-Command '{command}' -ErrorAction SilentlyContinue).Source"
+fn windows_command_paths(command: &str) -> Vec<PathBuf> {
+    powershell_lines(&format!(
+        "Get-Command '{command}' -All -CommandType Application -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source"
     ))
+    .into_iter()
     .map(PathBuf::from)
+    .collect()
 }
 
 /// Remove provider credentials inherited by the Modelay process before launching
@@ -488,21 +539,29 @@ fn windows_chatgpt_package_location() -> Option<PathBuf> {
 
 #[cfg(target_os = "windows")]
 fn powershell_line(script: &str) -> Option<String> {
+    powershell_lines(script).into_iter().next()
+}
+
+#[cfg(target_os = "windows")]
+fn powershell_lines(script: &str) -> Vec<String> {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    let output = Command::new("powershell.exe")
+    let Ok(output) = Command::new("powershell.exe")
         .creation_flags(CREATE_NO_WINDOW)
         .args(["-NoProfile", "-NonInteractive", "-Command", script])
         .output()
-        .ok()?;
+    else {
+        return Vec::new();
+    };
     if !output.status.success() {
-        return None;
+        return Vec::new();
     }
     String::from_utf8_lossy(&output.stdout)
         .lines()
         .map(str::trim)
-        .find(|line| !line.is_empty())
+        .filter(|line| !line.is_empty())
         .map(str::to_owned)
+        .collect()
 }
 
 pub fn open_folder(path: &Path) -> Result<()> {
@@ -522,5 +581,39 @@ pub fn open_folder(path: &Path) -> Result<()> {
         Ok(())
     } else {
         Err("无法打开文件夹。".into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn discovers_relocated_and_standalone_windows_codex_binaries() {
+        let directory = tempfile::tempdir().unwrap();
+        let local = directory.path().join("Local");
+        let home = directory.path().join("Home");
+        let app_data = directory.path().join("Roaming");
+        let relocated = local.join("OpenAI/Codex/bin/current/codex.exe");
+        let staging = local.join("OpenAI/Codex/bin/.staging-broken/codex.exe");
+        let standalone = home.join(".codex/packages/standalone/releases/0.150/bin/codex.exe");
+        let npm_shim = app_data.join("npm/codex.cmd");
+        for path in [&relocated, &staging, &standalone, &npm_shim] {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, b"fixture").unwrap();
+        }
+
+        let mut candidates = Vec::new();
+        append_windows_user_codex_candidates(
+            &mut candidates,
+            Some(&local),
+            Some(&home),
+            Some(&app_data),
+        );
+
+        assert!(candidates.contains(&relocated));
+        assert!(candidates.contains(&standalone));
+        assert!(candidates.contains(&npm_shim));
+        assert!(!candidates.contains(&staging));
     }
 }

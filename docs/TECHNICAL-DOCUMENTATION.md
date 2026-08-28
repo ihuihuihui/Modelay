@@ -93,13 +93,13 @@ macOS 使用 Keychain、`launchctl setenv`、ChatGPT 应用探测，并直接启
 
 公开 macOS 包另外使用固定的自签名开发代码签名证书。不同版本的 designated requirement 均为 `identifier "app.modelay.desktop"` 加同一证书根指纹，不再使用每次构建都会变化的 ad-hoc `cdhash`。证书私钥保存在 `/Users/Admin/Library/Application Support/Modelay Development/code-signing`，密码位于 macOS Keychain；GitHub Actions 只通过加密 Secrets 导入 P12。该签名用于稳定 Keychain 代码身份，仍不属于 Apple Developer ID，也不能替代 Gatekeeper 公证。
 
-Windows 使用 Credential Manager、`HKCU\\Environment` 和 `WM_SETTINGCHANGE` 广播环境更新，探测常见安装目录、运行中的 ChatGPT 进程和 Microsoft Store/MSIX 包；重启时优先复用可执行文件，必要时通过 Windows App ID 启动。额度胶囊添加 `WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW`，并通过 `SetWindowPos(..., SWP_FRAMECHANGED)` 立即应用扩展样式。
+Windows 使用 Credential Manager、`HKCU\\Environment` 和 `WM_SETTINGCHANGE` 广播环境更新，探测常见安装目录、运行中的 ChatGPT 进程和 Microsoft Store/MSIX 包；Codex CLI 发现优先使用 `CODEX_CLI_PATH`、`%LOCALAPPDATA%\\OpenAI\\Codex\\bin` 下的用户态迁移版本、独立安装器版本目录和 npm `codex.cmd`，逐个试运行后才回退到可能受 WindowsApps ACL 保护的包内文件。重启时优先复用可执行文件，必要时通过 Windows App ID 启动。额度胶囊添加 `WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW`，并通过 `SetWindowPos(..., SWP_FRAMECHANGED)` 立即应用扩展样式。
 
 ## 测试、构建与更新
 
 Rust 单元测试覆盖 TOML 保留、原子覆盖、精确文件快照、Provider/URL、全新安装仅官方渠道、已有 AiLink 渠道升级保留、Doctor、官方/第三方额度、Codex 多额度桶优先级、Provider 动态识别、数据库锁回滚，以及当前/旧版 SQLite 表结构。TypeScript 测试覆盖悬浮窗边缘几何、动态额度周期标签、模型选择和更新错误/进度状态。GitHub Actions 在 Linux 运行这些测试，并在 macOS、Windows 生成应用包；Windows Rust/Win32 源码也使用 `cargo-xwin` 与 Windows CRT/SDK 完成交叉编译检查。
 
-当前自动验证基线为 Rust 37 项单元测试和 TypeScript 18 项悬浮窗、额度标签、模型选择、跨渠道范围、版本说明和更新状态测试全部通过；新增 Doctor 大型 pretty JSON、稳定 Keychain service、共享额度缓存、推理强度能力校验、任务强度覆盖和会话交接回归用例。Rust Clippy 全目标零警告、TypeScript 类型检查与 Vite 生产构建通过。Windows runner 负责完整 Windows 编译和 NSIS 安装器生成；运行行为仍需 Windows 实机验收。
+当前自动验证基线包含 Windows 用户态 Codex 路径发现回归测试，以及既有 Rust 与 TypeScript 的悬浮窗、额度标签、模型选择、跨渠道范围、版本说明、更新状态、Doctor、Keychain、额度缓存、推理强度和会话交接测试。Rust Clippy 全目标零警告、TypeScript 类型检查与 Vite 生产构建通过。Windows runner 负责完整 Windows 编译和 NSIS 安装器生成；运行行为仍需 Windows 实机验收。
 
 `tauri.windows.conf.json` 将 Windows 默认 bundle 设为 NSIS 与 MSI。`scripts/package-windows.ps1` 负责复制安装器并生成 SHA-256 文件；macOS 脚本会自动识别 arm64/x64，优先使用 CI 注入的固定开发签名身份（本地未注入时回退 ad-hoc），然后执行严格签名验证、DMG 验证并生成 SHA-256 文件。两平台安装包统一写入顶层 `artifacts/installers`，不再放进会被 Vite 清空的 `dist` 目录。常规 CI 构建两平台安装包；版本标签发布工作流会校验标签与 `package.json` 版本完全一致，再由官方 Tauri Action 创建 GitHub Release、签名更新包和 `latest.json`。
 
