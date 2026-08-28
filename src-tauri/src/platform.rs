@@ -467,13 +467,10 @@ pub fn restart_chatgpt(environment: &[(String, Option<String>)]) -> Result<()> {
             command.spawn()?;
         }
         WindowsLaunchTarget::AppId(app_id) => {
-            let status = Command::new("explorer.exe")
+            Command::new("explorer.exe")
                 .creation_flags(CREATE_NO_WINDOW)
                 .arg(format!(r"shell:AppsFolder\{app_id}"))
-                .status()?;
-            if !status.success() {
-                return Err("无法通过 Windows 应用 ID 重新打开 ChatGPT。".into());
-            }
+                .spawn()?;
         }
     }
     Ok(())

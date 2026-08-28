@@ -72,6 +72,38 @@ button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px s
 .theme-light .release-overview section, .theme-light .update-release-details section { border-color: #d2dfe0; background: #f7fafa; }
 .theme-light .release-overview p, .theme-light .release-overview ul,
 .theme-light .update-release-details span { color: #62777d; }
+
+/* Light mode polish: every interactive surface gets the same cool-white canvas. */
+body:has(.theme-light) { color: #1b2b32; background: #eef4f4; }
+.theme-light .hero h1, .theme-light .panel h2, .theme-light .channel-info strong,
+.theme-light .bottom-item strong, .theme-light .modal h2, .theme-light .handoff-input label,
+.theme-light .task-scope-picker strong, .theme-light .model-picker strong,
+.theme-light .reasoning-picker strong { color: #1b2b32; }
+.theme-light .scope-options button, .theme-light .widget-mode,
+.theme-light .task-scope-picker input, .theme-light .handoff-input input,
+.theme-light .model-picker select, .theme-light .reasoning-picker select { color: #29424a; border-color: #c4d5d8; background: #f7fbfb; }
+.theme-light .scope-options button.active { color: #0b5d49; border-color: #63c6a4; background: #d8f3e8; }
+.theme-light .scope-options button:hover { color: #17443b; border-color: #79bbaa; background: #e8f6f1; }
+.theme-light .handoff-guide { border-color: #d6e2e3; background: #f2f7f7; }
+.theme-light .guide-title strong, .theme-light .guide-list b { color: #29434a; }
+.theme-light .guide-title span, .theme-light .guide-list span, .theme-light .guide-solution span { color: #678087; }
+.theme-light .guide-solution { border-color: #b9cfbd; background: #e6f2e8; }
+.theme-light .guide-solution strong { color: #396544; }
+.theme-light .handoff-beta-note { border-color: #d9c79d; color: #775d2b; background: #fff8e8; }
+.theme-light .handoff-beta-note strong { color: #6c4c16; }
+.theme-light .thread-health { border-color: #b8daca; color: #23483c; background: #e6f6ee; }
+.theme-light .thread-health.warning { border-color: #e1cca0; background: #fff7e5; }
+.theme-light .thread-health.critical { border-color: #e4b5b3; background: #fff0ef; }
+.theme-light .thread-health h3, .theme-light .latest-request p { color: #294149; }
+.theme-light .thread-health > p, .theme-light .health-stats, .theme-light .latest-request span { color: #6a8288; }
+.theme-light .check-row { color: #49636a; background: #fff; }
+.theme-light .check-row em { color: #71878d; }
+.theme-light .capsule-preview { background: #f6fbfb; }
+.theme-light .real-usage.balance b { color: #18a878; }
+.theme-light .statusbar { color: #6b8187; }
+.theme-light .error-banner { border-color: #e4b9b8; color: #8b3e3b; background: #fff1f0; }
+.theme-light .error-banner span { color: #9b5d5a; }
+.theme-light .report-row:hover { background: #edf6f4; }
 .info-modal { max-height: min(680px, calc(100vh - 48px)); overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
 .info-modal .modal-head { position: sticky; top: -23px; z-index: 2; margin: -23px -23px 19px; padding: 23px 23px 19px; background: #152129; }
 .beta-badge { display: inline-flex; align-items: center; vertical-align: middle; margin-left: 5px; padding: 2px 6px; border: 1px solid #765b32; border-radius: 999px; color: #e1b274; background: #2d2519; font-size: 8px; font-weight: 750; letter-spacing: .03em; }

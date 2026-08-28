@@ -1,5 +1,5 @@
 export const currentReleaseInfo = {
-  summary: "Beta 15 修复 Windows 控制台弹窗、渠道重启与会话保留，并加入主题和额度自动识别。",
+  summary: "Beta 16 修复 Windows 重启误报、旧渠道任务保留，并重新优化浅色模式。",
   changes: [
     "Windows 后台启动 Codex 时隐藏多余控制台窗口。",
     "修复切换渠道后重启 Codex 的拒绝访问问题。",

@@ -601,12 +601,13 @@ fn switch_inner(request: SwitchRequest) -> Result<SwitchReport> {
         };
         config::write(&config_document.document)?;
         for key in &environment_keys {
-            let value = if environment_key.as_deref() == Some(key.as_str()) {
-                secret.as_deref()
-            } else {
-                None
-            };
-            platform::set_user_environment(key, value)?;
+            let value = preferences
+                .channels
+                .iter()
+                .find(|item| item.environment_key() == *key)
+                .and_then(|item| secrets::get(item).ok().flatten())
+                .or_else(|| (environment_key.as_deref() == Some(key.as_str())).then(|| secret.clone()).flatten());
+            platform::set_user_environment(key, value.as_deref())?;
         }
         platform::set_user_environment(IMAGE_ENVIRONMENT_KEY, Some(image_skill))?;
         storage::save_image_skill(image_skill)?;
@@ -615,16 +616,21 @@ fn switch_inner(request: SwitchRequest) -> Result<SwitchReport> {
             detail: format!("Provider、模型、推理强度（{reasoning_effort}）与认证方式已原子写入"),
             state: CheckState::Passed,
         }];
-        let doctor_environment = environment_keys
+        let doctor_values = environment_keys
             .iter()
             .map(|key| {
-                let value = if environment_key.as_deref() == Some(key.as_str()) {
-                    secret.as_deref()
-                } else {
-                    None
-                };
-                (key.as_str(), value)
+                let value = preferences
+                    .channels
+                    .iter()
+                    .find(|item| item.environment_key() == *key)
+                    .and_then(|item| secrets::get(item).ok().flatten())
+                    .or_else(|| (environment_key.as_deref() == Some(key.as_str())).then(|| secret.clone()).flatten());
+                (key.clone(), value)
             })
+            .collect::<Vec<_>>();
+        let doctor_environment = doctor_values
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.as_deref()))
             .collect::<Vec<_>>();
         let doctor_detail = codex::doctor(&doctor_environment)?;
         checks.push(CheckResult {
@@ -763,7 +769,12 @@ pub async fn restart_chatgpt() -> std::result::Result<(), String> {
         let mut environment = preferences
             .channels
             .iter()
-            .map(|channel| (channel.environment_key(), None))
+            .map(|channel| {
+                (
+                    channel.environment_key(),
+                    secrets::get(channel).ok().flatten(),
+                )
+            })
             .collect::<Vec<(String, Option<String>)>>();
         environment.push((
             IMAGE_ENVIRONMENT_KEY.into(),
