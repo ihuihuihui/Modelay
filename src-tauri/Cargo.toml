@@ -1,6 +1,6 @@
 [package]
 name = "modelay"
-version = "4.0.0-beta.6"
+version = "4.0.0-beta.8"
 description = "Cross-platform provider switcher for Codex"
 authors = ["Modelay"]
 edition = "2021"

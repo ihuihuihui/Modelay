@@ -74,6 +74,8 @@ function App() {
   const [updateOpen, setUpdateOpen] = useState(false);
   const pendingUpdate = useRef<Update | null>(null);
   const startupUpdateCheck = useRef(false);
+  const notifiedUpdateVersion = useRef<string | null>(null);
+  const UPDATE_INTERVAL_MS = 3 * 60 * 60 * 1000;
 
   const allChannels = useMemo(() => [officialChannel, ...(state?.channels ?? [])], [state]);
   const selected = allChannels.find((channel) => channel.id === selectedId) ?? officialChannel;
@@ -117,7 +119,10 @@ function App() {
       setUpdateNotes(next.body ?? null);
       setUpdatePhase("available");
       setUpdateMessage(`发现新版本 ${next.version}`);
-      setUpdateOpen(true);
+      if (notifiedUpdateVersion.current !== next.version || manual) {
+        setUpdateOpen(true);
+        notifiedUpdateVersion.current = next.version;
+      }
     } catch (reason) {
       const classified = classifyUpdaterError(reason);
       setUpdatePhase(classified.phase);
@@ -131,7 +136,8 @@ function App() {
     if (startupUpdateCheck.current) return;
     startupUpdateCheck.current = true;
     const timer = window.setTimeout(() => void checkForUpdates(false), 4_000);
-    return () => window.clearTimeout(timer);
+    const interval = window.setInterval(() => void checkForUpdates(false), UPDATE_INTERVAL_MS);
+    return () => { window.clearTimeout(timer); window.clearInterval(interval); };
   }, [checkForUpdates]);
 
   const loadModels = useCallback(async (channelId: string, fallbackModel: string, validatesModelList: boolean) => {
