@@ -90,13 +90,14 @@ jobs:
           tagName: v__VERSION__
           releaseName: "Modelay v__VERSION__"
           releaseBody: |
-            续接任务不该像薛定谔的任务：明明建好了，却告诉你失败。这一版把这个误判认真收拾掉了。
+            WindowsApps 的门卫有点严格：文件明明在眼前，却不一定允许外部应用启动。这一版给 Modelay 换了更靠谱的进门方式。
 
             本次更新内容：
-            - 交接消息写入成功后，不再因为停止轮次的非关键错误显示“创建失败”。
-            - 续接首轮沿用新任务已确认的模型配置，提升第三方渠道兼容性。
-            - 续接失败会在功能区域显示真实原因和处理建议，不再只留一句模糊提示。
-            - 软件更新新增“版本说明”和“本次更新内容”，以后每次升级都知道改了什么。
+            - 优先使用 Windows 的 Codex App Execution Alias，不直接依赖受保护的 WindowsApps 文件。
+            - 候选 Codex 路径会先验证是否真正允许启动，拒绝访问的路径会被自动跳过。
+            - ChatGPT 已经登录时，Modelay 会识别本地官方认证状态，不再重复要求登录。
+            - 增加更多 Codex 独立安装目录和 CODEX_CLI_PATH 发现方式。
+            - 登录或命令启动失败时显示具体组件路径和原因，方便继续定位。
             - 已有渠道、密钥和旧任务内容都不会被删除。
           releaseDraft: false
           prerelease: false

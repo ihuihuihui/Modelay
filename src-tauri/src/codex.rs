@@ -1,6 +1,6 @@
 use crate::error::{ModelayError, Result};
 use crate::models::ModelInfo;
-use crate::platform;
+use crate::{paths, platform};
 use regex::Regex;
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Read, Write};
@@ -30,7 +30,8 @@ pub fn run_with_environment(
     environment: &[(&str, Option<&str>)],
     timeout: Duration,
 ) -> Result<CommandOutput> {
-    let mut command = Command::new(platform::codex_executable()?);
+    let executable = platform::codex_executable()?;
+    let mut command = Command::new(&executable);
     command
         .args(arguments)
         .stdout(Stdio::piped())
@@ -42,7 +43,12 @@ pub fn run_with_environment(
             command.env(key, value);
         }
     }
-    let mut child = command.spawn()?;
+    let mut child = command.spawn().map_err(|error| {
+        ModelayError::Message(format!(
+            "无法启动 Codex 命令行组件（{}）：{error}",
+            executable.display()
+        ))
+    })?;
     let stdout_reader = child.stdout.take().map(read_pipe);
     let stderr_reader = child.stderr.take().map(read_pipe);
     let status = match child.wait_timeout(timeout) {
@@ -126,6 +132,9 @@ fn redact_with_secrets<'a>(text: &str, secrets: impl IntoIterator<Item = &'a str
 }
 
 pub fn login_status() -> bool {
+    if official_credentials_present() {
+        return true;
+    }
     run(&["login", "status"], None, Duration::from_secs(12))
         .map(|output| {
             if !output.success {
@@ -143,6 +152,9 @@ pub fn login_status() -> bool {
 }
 
 pub fn login() -> Result<()> {
+    if official_credentials_present() {
+        return Ok(());
+    }
     let output = run(&["login"], None, Duration::from_secs(600))?;
     if !output.success {
         return Err(ModelayError::Message(format!(
@@ -155,6 +167,25 @@ pub fn login() -> Result<()> {
     } else {
         Err("登录结果不是 ChatGPT 官方账号。".into())
     }
+}
+
+fn official_credentials_present() -> bool {
+    let Ok(path) = paths::codex_dir().map(|directory| directory.join("auth.json")) else {
+        return false;
+    };
+    let Ok(bytes) = std::fs::read(path) else {
+        return false;
+    };
+    serde_json::from_slice::<Value>(&bytes)
+        .ok()
+        .is_some_and(|value| is_official_auth_json(&value))
+}
+
+fn is_official_auth_json(value: &Value) -> bool {
+    value
+        .get("auth_mode")
+        .and_then(Value::as_str)
+        .is_some_and(|mode| mode.eq_ignore_ascii_case("chatgpt"))
 }
 
 pub fn doctor(environment: &[(&str, Option<&str>)]) -> Result<String> {
@@ -528,6 +559,19 @@ pub fn list_models() -> Result<Vec<ModelInfo>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recognizes_only_chatgpt_auth_as_official_login() {
+        assert!(is_official_auth_json(
+            &json!({"auth_mode": "chatgpt", "tokens": {"access_token": "never-read"}})
+        ));
+        assert!(!is_official_auth_json(
+            &json!({"auth_mode": "apikey", "OPENAI_API_KEY": "never-read"})
+        ));
+        assert!(!is_official_auth_json(
+            &json!({"tokens": {"access_token": "never-read"}})
+        ));
+    }
 
     #[test]
     fn doctor_ignores_unrelated_terminal_failure() {

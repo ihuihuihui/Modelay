@@ -1,5 +1,5 @@
 export const currentReleaseInfo = {
-  summary: "Beta 12 修正官方配置回归，并停止用不可靠的方式误判 Windows Codex。",
+  summary: "Beta 13 绕开 WindowsApps 权限陷阱，已登录的官方账号也能直接被认出来。",
   changes: [
     "续接消息写入成功后，不再被停止轮次的非关键错误误判为失败。",
     "续接首轮沿用新任务已经确认的模型配置，提升第三方渠道兼容性。",
@@ -17,5 +17,7 @@ export const currentReleaseInfo = {
     "切换第三方渠道时保留 openai_http 官方 Provider 定义，旧官方会话可继续加载。",
     "官方渠道不再激活 openai_http，避免 ChatGPT 报 Provider not found。",
     "Windows 不再用 --version 误判 Codex，兼容更多商店版和独立安装版。",
+    "优先使用 Windows App Execution Alias，并跳过无法启动的受保护 Codex 路径。",
+    "ChatGPT 已登录时直接识别本地官方认证状态，不读取或回传任何令牌。",
   ],
 } as const;

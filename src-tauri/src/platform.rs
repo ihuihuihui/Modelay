@@ -71,6 +71,13 @@ pub fn codex_executable() -> Result<PathBuf> {
     }
     #[cfg(target_os = "windows")]
     {
+        // Let Windows resolve App Execution Aliases before inspecting package
+        // directories. Store installations commonly expose a runnable alias
+        // while the real WindowsApps binary remains ACL-protected.
+        candidates.push(PathBuf::from("codex.exe"));
+        if let Some(path) = std::env::var_os("CODEX_CLI_PATH") {
+            candidates.push(PathBuf::from(path));
+        }
         // Prefer a user-installed/explicit PATH Codex first. The Microsoft Store
         // ChatGPT process often lives under WindowsApps and its bundled binary
         // can be unreadable to a normal desktop process (ERROR_ACCESS_DENIED).
@@ -87,7 +94,11 @@ pub fn codex_executable() -> Result<PathBuf> {
         }
         if let Ok(local) = std::env::var("LOCALAPPDATA") {
             candidates.push(PathBuf::from(&local).join("Programs/Codex/codex.exe"));
+            candidates.push(PathBuf::from(&local).join("Programs/Codex/resources/codex.exe"));
             candidates.push(PathBuf::from(&local).join("Programs/OpenAI/Codex/codex.exe"));
+            candidates
+                .push(PathBuf::from(&local).join("Programs/OpenAI/Codex/resources/codex.exe"));
+            candidates.push(PathBuf::from(&local).join("OpenAI/Codex/resources/codex.exe"));
         }
         if let Ok(appdata) = std::env::var("APPDATA") {
             candidates.push(PathBuf::from(&appdata).join("npm/codex.exe"));
@@ -135,9 +146,36 @@ pub fn codex_executable() -> Result<PathBuf> {
 
 #[cfg(target_os = "windows")]
 fn windows_codex_is_runnable(path: &Path) -> bool {
-    // Some Codex builds return non-zero for `--version` while still working.
-    // Probe existence/metadata only to avoid false negatives and console popups.
-    path.is_file() && std::fs::metadata(path).is_ok()
+    use std::os::windows::process::CommandExt;
+    use std::process::Stdio;
+    use wait_timeout::ChildExt;
+
+    // Spawning is the only reliable ACL check for WindowsApps paths. Ignore
+    // the exit code because some Codex builds return non-zero for --version.
+    let mut child = match Command::new(path)
+        .arg("--version")
+        .creation_flags(0x0800_0000)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(_) => return false,
+    };
+    match child.wait_timeout(std::time::Duration::from_secs(3)) {
+        Ok(Some(_)) => true,
+        Ok(None) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            true
+        }
+        Err(_) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            true
+        }
+    }
 }
 
 #[cfg(target_os = "windows")]
