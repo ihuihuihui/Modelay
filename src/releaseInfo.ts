@@ -1,5 +1,5 @@
 export const currentReleaseInfo = {
-  summary: "Beta 8 给更新提醒设好闹钟：启动先看一次，之后每三小时轻声提醒。",
+  summary: "Beta 9 修好 Windows 首次登录找错 Codex 的问题，拒绝访问不再挡门。",
   changes: [
     "续接消息写入成功后，不再被停止轮次的非关键错误误判为失败。",
     "续接首轮沿用新任务已经确认的模型配置，提升第三方渠道兼容性。",
@@ -12,5 +12,6 @@ export const currentReleaseInfo = {
     "官方登录状态兼容不同 Codex 版本的输出文案，不再只认某一种提示。",
     "macOS 与 Windows 启动后自动检查一次更新，运行期间每 3 小时检查一次。",
     "同一版本不会反复弹窗打扰；发现新版本时才推送更新提示。",
+    "Windows 会逐个试运行 Codex 路径，自动跳过受保护或无权限的安装位置。",
   ],
 } as const;

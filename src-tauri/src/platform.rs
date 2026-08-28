@@ -71,6 +71,18 @@ pub fn codex_executable() -> Result<PathBuf> {
     }
     #[cfg(target_os = "windows")]
     {
+        // Prefer a user-installed/explicit PATH Codex first. The Microsoft Store
+        // ChatGPT process often lives under WindowsApps and its bundled binary
+        // can be unreadable to a normal desktop process (ERROR_ACCESS_DENIED).
+        if let Some(paths) = std::env::var_os("PATH") {
+            for directory in std::env::split_paths(&paths) {
+                candidates.push(directory.join("codex.exe"));
+            }
+        }
+        if let Ok(local) = std::env::var("LOCALAPPDATA") {
+            candidates.push(PathBuf::from(&local).join("Programs/Codex/codex.exe"));
+            candidates.push(PathBuf::from(&local).join("Programs/OpenAI/Codex/codex.exe"));
+        }
         if let Some(path) = running_windows_process_path("ChatGPT.exe") {
             if let Some(directory) = path.parent() {
                 candidates.push(directory.join("resources/codex.exe"));
@@ -87,17 +99,38 @@ pub fn codex_executable() -> Result<PathBuf> {
             candidates.push(location.join("Resources/codex.exe"));
         }
     }
+    #[cfg(not(target_os = "windows"))]
     if let Some(paths) = std::env::var_os("PATH") {
         for directory in std::env::split_paths(&paths) {
             candidates.push(directory.join(if cfg!(windows) { "codex.exe" } else { "codex" }));
         }
     }
-    candidates
+    candidates.dedup();
+    #[cfg(target_os = "windows")]
+    let runnable = candidates
         .into_iter()
-        .find(|path| path.is_file())
-        .ok_or_else(|| {
-            ModelayError::Message("找不到 Codex 命令行组件，请确认 ChatGPT/Codex 已安装。".into())
-        })
+        .find(|path| windows_codex_is_runnable(path));
+    #[cfg(not(target_os = "windows"))]
+    let runnable = candidates.into_iter().find(|path| path.is_file());
+    runnable.ok_or_else(|| {
+        ModelayError::Message("找不到 Codex 命令行组件，请确认 ChatGPT/Codex 已安装。".into())
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn windows_codex_is_runnable(path: &Path) -> bool {
+    use std::os::windows::process::CommandExt;
+    if !path.is_file() {
+        return false;
+    }
+    Command::new(path)
+        .arg("--version")
+        .creation_flags(0x0800_0000)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
 }
 
 /// Remove provider credentials inherited by the Modelay process before launching

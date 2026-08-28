@@ -127,7 +127,18 @@ fn redact_with_secrets<'a>(text: &str, secrets: impl IntoIterator<Item = &'a str
 
 pub fn login_status() -> bool {
     run(&["login", "status"], None, Duration::from_secs(12))
-        .map(|output| output.success && output.text.to_lowercase().contains("chatgpt"))
+        .map(|output| {
+            if !output.success {
+                return false;
+            }
+            // Codex has changed the wording and localization of this output
+            // across releases. A successful status command is authoritative;
+            // only explicit signed-out/error markers should make it false.
+            let text = output.text.to_lowercase();
+            !["not logged", "logged out", "unauthenticated", "未登录"]
+                .iter()
+                .any(|marker| text.contains(marker))
+        })
         .unwrap_or(false)
 }
 
