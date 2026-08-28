@@ -89,6 +89,12 @@ pub fn codex_executable() -> Result<PathBuf> {
                 candidates.push(directory.join("Resources/codex.exe"));
             }
         }
+        if let Some(path) = running_windows_process_path("Codex.exe") {
+            if let Some(directory) = path.parent() {
+                candidates.push(directory.join("resources/codex.exe"));
+                candidates.push(directory.join("Resources/codex.exe"));
+            }
+        }
         if let Ok(local) = std::env::var("LOCALAPPDATA") {
             candidates
                 .push(PathBuf::from(&local).join("Programs/OpenAI/ChatGPT/resources/codex.exe"));
@@ -428,7 +434,7 @@ fn running_windows_process_path(name: &str) -> Option<PathBuf> {
 #[cfg(target_os = "windows")]
 fn windows_chatgpt_package_location() -> Option<PathBuf> {
     powershell_line(
-        "Get-AppxPackage | Where-Object { $_.Name -like '*ChatGPT*' -or $_.PackageFamilyName -like '*ChatGPT*' } | Select-Object -First 1 -ExpandProperty InstallLocation",
+        "Get-AppxPackage | Where-Object { $_.Name -like '*ChatGPT*' -or $_.Name -like '*Codex*' -or $_.PackageFamilyName -like '*ChatGPT*' -or $_.PackageFamilyName -like '*Codex*' } | Sort-Object InstallDate -Descending | Select-Object -First 1 -ExpandProperty InstallLocation",
     )
     .map(PathBuf::from)
 }
