@@ -60,7 +60,31 @@ pub fn active_reasoning_effort(document: &DocumentMut) -> String {
 pub fn activate_official(document: &mut DocumentMut, model: &str, reasoning_effort: &str) {
     document["model"] = value(model);
     document["model_reasoning_effort"] = value(reasoning_effort);
-    document.remove("model_provider");
+    ensure_official_provider(document);
+    document["model_provider"] = value("openai_http");
+}
+
+/// Keep the provider definition available even when the active channel is a
+/// third-party one. Existing official tasks store `openai_http` in SQLite and
+/// Codex must be able to resolve that provider when those tasks are opened.
+pub fn ensure_official_provider(document: &mut DocumentMut) {
+    if !document.contains_key("model_providers") {
+        document["model_providers"] = Item::Table(Table::new());
+    }
+    let Some(providers) = document["model_providers"].as_table_mut() else {
+        return;
+    };
+    if !providers.contains_key("openai_http") {
+        providers["openai_http"] = Item::Table(Table::new());
+    }
+    if let Some(provider) = providers["openai_http"].as_table_mut() {
+        provider["name"] = value("OpenAI");
+        provider["requires_openai_auth"] = value(true);
+        provider["wire_api"] = value("responses");
+        provider.remove("env_key");
+        provider.remove("base_url");
+        provider.remove("experimental_bearer_token");
+    }
 }
 
 pub fn activate_channel(
@@ -68,6 +92,7 @@ pub fn activate_channel(
     channel: &ChannelProfile,
     reasoning_effort: &str,
 ) -> Result<()> {
+    ensure_official_provider(document);
     let provider_id = channel.provider_id();
     document["model_provider"] = value(&provider_id);
     document["model"] = value(channel.model.trim());
@@ -166,7 +191,10 @@ enabled = true
         assert!(!output.contains("experimental_bearer_token"));
         assert!(is_channel_conformant(&document, &channel));
         activate_official(&mut document, "gpt-5.6-sol", "low");
-        assert!(document.get("model_provider").is_none());
+        assert_eq!(active_provider(&document), "openai_http");
+        assert!(document
+            .to_string()
+            .contains("[model_providers.openai_http]"));
         assert_eq!(active_reasoning_effort(&document), "low");
         assert!(document.to_string().contains("[model_providers.custom]"));
     }

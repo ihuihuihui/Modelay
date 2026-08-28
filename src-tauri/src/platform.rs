@@ -79,9 +79,15 @@ pub fn codex_executable() -> Result<PathBuf> {
                 candidates.push(directory.join("codex.exe"));
             }
         }
+        if let Some(path) = windows_command_path("codex.exe") {
+            candidates.push(path);
+        }
         if let Ok(local) = std::env::var("LOCALAPPDATA") {
             candidates.push(PathBuf::from(&local).join("Programs/Codex/codex.exe"));
             candidates.push(PathBuf::from(&local).join("Programs/OpenAI/Codex/codex.exe"));
+        }
+        if let Ok(appdata) = std::env::var("APPDATA") {
+            candidates.push(PathBuf::from(&appdata).join("npm/codex.exe"));
         }
         if let Some(path) = running_windows_process_path("ChatGPT.exe") {
             if let Some(directory) = path.parent() {
@@ -137,6 +143,14 @@ fn windows_codex_is_runnable(path: &Path) -> bool {
         .status()
         .map(|status| status.success())
         .unwrap_or(false)
+}
+
+#[cfg(target_os = "windows")]
+fn windows_command_path(command: &str) -> Option<PathBuf> {
+    powershell_line(&format!(
+        "(Get-Command '{command}' -ErrorAction SilentlyContinue).Source"
+    ))
+    .map(PathBuf::from)
 }
 
 /// Remove provider credentials inherited by the Modelay process before launching
