@@ -1,5 +1,5 @@
 export const currentReleaseInfo = {
-  summary: "Beta 11 修好跨渠道旧会话，也继续加强 Windows Codex 自动发现。",
+  summary: "Beta 12 修正官方配置回归，并停止用不可靠的方式误判 Windows Codex。",
   changes: [
     "续接消息写入成功后，不再被停止轮次的非关键错误误判为失败。",
     "续接首轮沿用新任务已经确认的模型配置，提升第三方渠道兼容性。",
@@ -15,5 +15,7 @@ export const currentReleaseInfo = {
     "Windows 会逐个试运行 Codex 路径，自动跳过受保护或无权限的安装位置。",
     "同时识别 ChatGPT 与 Codex 的 Windows 商店包，以及正在运行的 Codex.exe。",
     "切换第三方渠道时保留 openai_http 官方 Provider 定义，旧官方会话可继续加载。",
+    "官方渠道不再激活 openai_http，避免 ChatGPT 报 Provider not found。",
+    "Windows 不再用 --version 误判 Codex，兼容更多商店版和独立安装版。",
   ],
 } as const;

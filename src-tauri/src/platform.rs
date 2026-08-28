@@ -82,6 +82,9 @@ pub fn codex_executable() -> Result<PathBuf> {
         if let Some(path) = windows_command_path("codex.exe") {
             candidates.push(path);
         }
+        if let Some(path) = windows_command_path("codex") {
+            candidates.push(path);
+        }
         if let Ok(local) = std::env::var("LOCALAPPDATA") {
             candidates.push(PathBuf::from(&local).join("Programs/Codex/codex.exe"));
             candidates.push(PathBuf::from(&local).join("Programs/OpenAI/Codex/codex.exe"));
@@ -107,6 +110,7 @@ pub fn codex_executable() -> Result<PathBuf> {
             candidates.push(PathBuf::from(&local).join("OpenAI/ChatGPT/resources/codex.exe"));
         }
         if let Some(location) = windows_chatgpt_package_location() {
+            candidates.push(location.join("codex.exe"));
             candidates.push(location.join("resources/codex.exe"));
             candidates.push(location.join("Resources/codex.exe"));
         }
@@ -131,18 +135,9 @@ pub fn codex_executable() -> Result<PathBuf> {
 
 #[cfg(target_os = "windows")]
 fn windows_codex_is_runnable(path: &Path) -> bool {
-    use std::os::windows::process::CommandExt;
-    if !path.is_file() {
-        return false;
-    }
-    Command::new(path)
-        .arg("--version")
-        .creation_flags(0x0800_0000)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|status| status.success())
-        .unwrap_or(false)
+    // Some Codex builds return non-zero for `--version` while still working.
+    // Probe existence/metadata only to avoid false negatives and console popups.
+    path.is_file() && std::fs::metadata(path).is_ok()
 }
 
 #[cfg(target_os = "windows")]

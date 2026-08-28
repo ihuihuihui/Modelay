@@ -60,8 +60,11 @@ pub fn active_reasoning_effort(document: &DocumentMut) -> String {
 pub fn activate_official(document: &mut DocumentMut, model: &str, reasoning_effort: &str) {
     document["model"] = value(model);
     document["model_reasoning_effort"] = value(reasoning_effort);
+    // Official mode must not activate a custom provider. ChatGPT resolves its
+    // built-in provider when `model_provider` is absent; setting openai_http
+    // here makes the desktop app reject the config as an unknown provider.
     ensure_official_provider(document);
-    document["model_provider"] = value("openai_http");
+    document.remove("model_provider");
 }
 
 /// Keep the provider definition available even when the active channel is a
@@ -192,6 +195,7 @@ enabled = true
         assert!(is_channel_conformant(&document, &channel));
         activate_official(&mut document, "gpt-5.6-sol", "low");
         assert_eq!(active_provider(&document), "openai_http");
+        assert!(document.get("model_provider").is_none());
         assert!(document
             .to_string()
             .contains("[model_providers.openai_http]"));

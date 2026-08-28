@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { currentReleaseInfo } from "../src/releaseInfo.ts";
 
 test("provides a clear current-version summary", () => {
-  assert.match(currentReleaseInfo.summary, /Beta 11/);
+  assert.match(currentReleaseInfo.summary, /Beta 12/);
   assert.ok(currentReleaseInfo.summary.length >= 20);
 });
 
