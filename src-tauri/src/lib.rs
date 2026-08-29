@@ -63,6 +63,7 @@ pub fn run() {
             use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 
             let preferences = storage::initialize()?;
+            config::ensure_context_management_on_disk()?;
             let open_item = MenuItem::with_id(app, "open", "打开 Modelay", true, None::<&str>)?;
             let quit_item = MenuItem::with_id(app, "quit", "退出 Modelay", true, None::<&str>)?;
             let tray_menu = Menu::with_items(app, &[&open_item, &quit_item])?;

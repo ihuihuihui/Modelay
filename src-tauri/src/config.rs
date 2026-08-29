@@ -6,6 +6,10 @@ use std::fs;
 use std::path::PathBuf;
 use toml_edit::{value, DocumentMut, Item, Table};
 
+pub const DEFAULT_MODEL_CONTEXT_WINDOW: i64 = 400_000;
+pub const DEFAULT_AUTO_COMPACT_TOKEN_LIMIT: i64 = 260_000;
+pub const MAX_AUTO_COMPACT_TOKEN_LIMIT_EXCLUSIVE: i64 = 272_000;
+
 pub struct ConfigDocument {
     pub existed: bool,
     pub original: String,
@@ -60,6 +64,7 @@ pub fn active_reasoning_effort(document: &DocumentMut) -> String {
 pub fn activate_official(document: &mut DocumentMut, model: &str, reasoning_effort: &str) {
     document["model"] = value(model);
     document["model_reasoning_effort"] = value(reasoning_effort);
+    ensure_context_management(document);
     // Official mode must not activate a custom provider. ChatGPT resolves its
     // built-in provider when `model_provider` is absent; setting openai_http
     // here makes the desktop app reject the config as an unknown provider.
@@ -100,6 +105,7 @@ pub fn activate_channel(
     document["model_provider"] = value(&provider_id);
     document["model"] = value(channel.model.trim());
     document["model_reasoning_effort"] = value(reasoning_effort);
+    ensure_context_management(document);
     if !document.contains_key("model_providers") {
         document["model_providers"] = Item::Table(Table::new());
     }
@@ -120,6 +126,64 @@ pub fn activate_channel(
     provider["supports_websockets"] = value(false);
     provider.remove("experimental_bearer_token");
     Ok(())
+}
+
+/// Apply safe defaults without overriding an intentional, valid custom
+/// context window or a lower auto-compaction threshold.
+pub fn ensure_context_management(document: &mut DocumentMut) {
+    let context_window = document
+        .get("model_context_window")
+        .and_then(Item::as_integer)
+        .filter(|value| *value > 1)
+        .unwrap_or(DEFAULT_MODEL_CONTEXT_WINDOW);
+    if document
+        .get("model_context_window")
+        .and_then(Item::as_integer)
+        .is_none_or(|value| value <= 1)
+    {
+        document["model_context_window"] = value(context_window);
+    }
+
+    let compact_limit = document
+        .get("model_auto_compact_token_limit")
+        .and_then(Item::as_integer);
+    let is_safe = compact_limit.is_some_and(|limit| {
+        limit > 0 && limit < MAX_AUTO_COMPACT_TOKEN_LIMIT_EXCLUSIVE && limit < context_window
+    });
+    if !is_safe {
+        let safe_default = DEFAULT_AUTO_COMPACT_TOKEN_LIMIT.min(context_window.saturating_sub(1));
+        document["model_auto_compact_token_limit"] = value(safe_default.max(1));
+    }
+}
+
+pub fn has_safe_context_management(document: &DocumentMut) -> bool {
+    let Some(context_window) = document
+        .get("model_context_window")
+        .and_then(Item::as_integer)
+        .filter(|value| *value > 1)
+    else {
+        return false;
+    };
+    document
+        .get("model_auto_compact_token_limit")
+        .and_then(Item::as_integer)
+        .is_some_and(|limit| {
+            limit > 0 && limit < MAX_AUTO_COMPACT_TOKEN_LIMIT_EXCLUSIVE && limit < context_window
+        })
+}
+
+/// Repair the user-level config at startup so the protection is active even
+/// before the next channel switch. Returns whether the file changed.
+pub fn ensure_context_management_on_disk() -> Result<bool> {
+    let mut config = read()?;
+    let before = config.document.to_string();
+    ensure_context_management(&mut config.document);
+    if config.document.to_string() == before {
+        return Ok(false);
+    }
+    backup(&config.original)?;
+    write(&config.document)?;
+    Ok(true)
 }
 
 pub fn is_channel_conformant(document: &DocumentMut, channel: &ChannelProfile) -> bool {
@@ -201,5 +265,45 @@ enabled = true
             .contains("[model_providers.openai_http]"));
         assert_eq!(active_reasoning_effort(&document), "low");
         assert!(document.to_string().contains("[model_providers.custom]"));
+        assert_eq!(
+            document["model_context_window"].as_integer(),
+            Some(DEFAULT_MODEL_CONTEXT_WINDOW)
+        );
+        assert_eq!(
+            document["model_auto_compact_token_limit"].as_integer(),
+            Some(DEFAULT_AUTO_COMPACT_TOKEN_LIMIT)
+        );
+        assert!(has_safe_context_management(&document));
+    }
+
+    #[test]
+    fn repairs_unsafe_compaction_and_preserves_safe_custom_values() {
+        let mut unsafe_document = r#"
+model_context_window = 400000
+model_auto_compact_token_limit = 272000
+"#
+        .parse::<DocumentMut>()
+        .unwrap();
+        ensure_context_management(&mut unsafe_document);
+        assert_eq!(
+            unsafe_document["model_auto_compact_token_limit"].as_integer(),
+            Some(DEFAULT_AUTO_COMPACT_TOKEN_LIMIT)
+        );
+
+        let mut custom_document = r#"
+model_context_window = 300000
+model_auto_compact_token_limit = 180000
+"#
+        .parse::<DocumentMut>()
+        .unwrap();
+        ensure_context_management(&mut custom_document);
+        assert_eq!(
+            custom_document["model_context_window"].as_integer(),
+            Some(300_000)
+        );
+        assert_eq!(
+            custom_document["model_auto_compact_token_limit"].as_integer(),
+            Some(180_000)
+        );
     }
 }

@@ -111,13 +111,14 @@ fn app_state() -> Result<AppState> {
     for channel in &mut channels {
         channel.has_secret = Some(secrets::has(channel));
     }
-    let conformant = if current_mode == "official" {
+    let provider_conformant = if current_mode == "official" {
         config.document.get("model_provider").is_none()
     } else {
         current_channel
             .map(|channel| config::is_channel_conformant(&config.document, channel))
             .unwrap_or(false)
     };
+    let conformant = provider_conformant && config::has_safe_context_management(&config.document);
     Ok(AppState {
         platform: platform::platform_label(),
         current_mode: current_mode.into(),
@@ -606,7 +607,11 @@ fn switch_inner(request: SwitchRequest) -> Result<SwitchReport> {
                 .iter()
                 .find(|item| item.environment_key() == *key)
                 .and_then(|item| secrets::get(item).ok().flatten())
-                .or_else(|| (environment_key.as_deref() == Some(key.as_str())).then(|| secret.clone()).flatten());
+                .or_else(|| {
+                    (environment_key.as_deref() == Some(key.as_str()))
+                        .then(|| secret.clone())
+                        .flatten()
+                });
             platform::set_user_environment(key, value.as_deref())?;
         }
         platform::set_user_environment(IMAGE_ENVIRONMENT_KEY, Some(image_skill))?;
@@ -616,6 +621,20 @@ fn switch_inner(request: SwitchRequest) -> Result<SwitchReport> {
             detail: format!("Provider、模型、推理强度（{reasoning_effort}）与认证方式已原子写入"),
             state: CheckState::Passed,
         }];
+        checks.push(CheckResult {
+            title: "上下文自动压缩".into(),
+            detail: format!(
+                "上下文窗口 {} tokens；自动压缩阈值 {} tokens（严格低于 {}）",
+                config_document.document["model_context_window"]
+                    .as_integer()
+                    .unwrap_or(config::DEFAULT_MODEL_CONTEXT_WINDOW),
+                config_document.document["model_auto_compact_token_limit"]
+                    .as_integer()
+                    .unwrap_or(config::DEFAULT_AUTO_COMPACT_TOKEN_LIMIT),
+                config::MAX_AUTO_COMPACT_TOKEN_LIMIT_EXCLUSIVE
+            ),
+            state: CheckState::Passed,
+        });
         let doctor_values = environment_keys
             .iter()
             .map(|key| {
@@ -624,7 +643,11 @@ fn switch_inner(request: SwitchRequest) -> Result<SwitchReport> {
                     .iter()
                     .find(|item| item.environment_key() == *key)
                     .and_then(|item| secrets::get(item).ok().flatten())
-                    .or_else(|| (environment_key.as_deref() == Some(key.as_str())).then(|| secret.clone()).flatten());
+                    .or_else(|| {
+                        (environment_key.as_deref() == Some(key.as_str()))
+                            .then(|| secret.clone())
+                            .flatten()
+                    });
                 (key.clone(), value)
             })
             .collect::<Vec<_>>();
