@@ -24,6 +24,54 @@ pub async fn get_thread_health(thread_id: String) -> std::result::Result<ThreadH
 }
 
 #[tauri::command]
+pub async fn list_user_threads() -> std::result::Result<Vec<ThreadSummary>, String> {
+    run_blocking(|| {
+        let preferences = storage::load_preferences()?;
+        let config_document = config::read()?;
+        let mut items = sessions::list_user_threads(100)?;
+        for item in &mut items {
+            item.issue = if item
+                .original_provider_id
+                .as_deref()
+                .is_some_and(|original| original != item.provider_id)
+            {
+                Some(format!(
+                    "任务原始渠道是 {}，但本地索引现在记录为 {}；可能曾被旧版渠道切换改写。",
+                    item.original_provider_id.as_deref().unwrap_or("未知"),
+                    item.provider_id
+                ))
+            } else if item.model.trim().is_empty() {
+                Some("任务索引缺少模型，无法直接继续。".into())
+            } else if item.provider_id.starts_with("openai") {
+                None
+            } else if let Some(channel) = preferences
+                .channels
+                .iter()
+                .find(|channel| channel.provider_id() == item.provider_id)
+            {
+                if !secrets::has(channel) {
+                    Some(format!("{} 的旧任务缺少已保存密钥。", channel.name))
+                } else if !config::has_provider(&config_document.document, &item.provider_id) {
+                    Some(format!(
+                        "config.toml 缺少 Provider {}；重新应用对应渠道后可恢复。",
+                        item.provider_id
+                    ))
+                } else {
+                    None
+                }
+            } else {
+                Some(format!(
+                    "旧任务使用的 Provider {} 已不在 Modelay 渠道列表中。",
+                    item.provider_id
+                ))
+            };
+        }
+        Ok(items)
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn create_thread_handoff(
     request: HandoffRequest,
 ) -> std::result::Result<HandoffReport, String> {

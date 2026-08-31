@@ -129,6 +129,16 @@ type ThreadHealth = {
   riskReasons: string[];
   latestUserRequest?: string;
 };
+type ThreadSummary = {
+  threadId: string;
+  title: string;
+  cwd: string;
+  providerId: string;
+  originalProviderId?: string;
+  model: string;
+  updatedAtMs: number;
+  issue?: string;
+};
 type HandoffReport = {
   sourceThreadId: string;
   newThreadId: string;
@@ -189,6 +199,9 @@ function App() {
   const [sessionScope, setSessionScope] = useState<SessionScope>("all");
   const [threadId, setThreadId] = useState("");
   const [handoffThreadId, setHandoffThreadId] = useState("");
+  const [threadOptions, setThreadOptions] = useState<ThreadSummary[]>([]);
+  const [threadsLoading, setThreadsLoading] = useState(false);
+  const [threadListError, setThreadListError] = useState<string | null>(null);
   const [threadHealth, setThreadHealth] = useState<ThreadHealth | null>(null);
   const [handoffReport, setHandoffReport] = useState<HandoffReport | null>(
     null,
@@ -238,6 +251,9 @@ function App() {
   const activeId =
     state?.currentMode === "official" ? "official" : state?.currentChannelId;
   const active = allChannels.find((channel) => channel.id === activeId);
+  const selectedThread = threadOptions.find(
+    (thread) => thread.threadId === handoffThreadId,
+  );
   const selectedModelInfo = models.find((model) => model.id === selectedModel);
   const availableReasoningEfforts = useMemo(() => {
     const advertised = selectedModelInfo?.supportedReasoningEfforts ?? [];
@@ -269,6 +285,22 @@ function App() {
   useEffect(() => {
     void loadState();
   }, [loadState]);
+
+  const loadThreads = useCallback(async () => {
+    setThreadsLoading(true);
+    try {
+      setThreadOptions(await invoke<ThreadSummary[]>("list_user_threads"));
+      setThreadListError(null);
+    } catch (reason) {
+      setThreadListError(String(reason));
+    } finally {
+      setThreadsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadThreads();
+  }, [loadThreads]);
 
   const checkForUpdates = useCallback(async (manual = false) => {
     setUpdatePhase("checking");
@@ -543,6 +575,30 @@ function App() {
       setError(String(reason));
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function copyText(text: string, label: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      setMessage(`${label}已复制`);
+      return;
+    } catch {
+      const textarea = document.createElement("textarea");
+      textarea.value = text;
+      textarea.setAttribute("readonly", "");
+      textarea.style.position = "fixed";
+      textarea.style.opacity = "0";
+      document.body.appendChild(textarea);
+      textarea.focus();
+      textarea.select();
+      const copied = document.execCommand("copy");
+      textarea.remove();
+      if (copied) {
+        setMessage(`${label}已复制`);
+      } else {
+        setError(`无法复制${label}，请先点击 Modelay 窗口后重试。`);
+      }
     }
   }
 
@@ -967,8 +1023,16 @@ function App() {
                     value={threadId}
                     onChange={(event) => setThreadId(event.target.value)}
                     placeholder="例如 01a0347b-beff-7c60-ae6b-d6cdf766e863"
+                    list="modelay-local-thread-ids"
                     spellCheck={false}
                   />
+                  <datalist id="modelay-local-thread-ids">
+                    {threadOptions.map((thread) => (
+                      <option value={thread.threadId} key={thread.threadId}>
+                        {thread.title || thread.providerId}
+                      </option>
+                    ))}
+                  </datalist>
                 </label>
               )}
               {!isCurrent && (
@@ -1124,8 +1188,99 @@ function App() {
                 续接会读取当天会话摘要并创建新任务；如果失败，旧任务不会被修改。建议先保存工作区，再进行测试。
               </span>
             </div>
+            <div className="local-thread-picker">
+              <div className="local-thread-picker-head">
+                <label htmlFor="local-thread-select">从本地旧任务选择</label>
+                <button
+                  className="mini-btn"
+                  aria-label="刷新本地任务列表"
+                  title="刷新本地任务列表"
+                  onClick={() => void loadThreads()}
+                  disabled={threadsLoading}
+                >
+                  <RefreshCw
+                    size={14}
+                    className={threadsLoading ? "spin" : ""}
+                  />
+                </button>
+              </div>
+              <select
+                id="local-thread-select"
+                value={
+                  threadOptions.some(
+                    (thread) => thread.threadId === handoffThreadId,
+                  )
+                    ? handoffThreadId
+                    : ""
+                }
+                onChange={(event) => {
+                  setHandoffThreadId(event.target.value);
+                  setThreadHealth(null);
+                  setHandoffReport(null);
+                  setHandoffError(null);
+                }}
+                disabled={threadsLoading}
+              >
+                <option value="">
+                  {threadsLoading
+                    ? "正在读取本地任务…"
+                    : `请选择任务（最近 ${threadOptions.length} 个）`}
+                </option>
+                {threadOptions.map((thread) => (
+                  <option value={thread.threadId} key={thread.threadId}>
+                    {thread.issue ? "需修复 · " : "可检查 · "}
+                    {thread.title || thread.threadId} · {thread.providerId} / {thread.model}
+                  </option>
+                ))}
+              </select>
+              <small>
+                直接读取本机 Codex 任务索引，不需要从 ChatGPT 复制会话 ID。
+              </small>
+              {threadListError && (
+                <div className="thread-diagnostic bad" role="alert">
+                  <AlertTriangle size={14} />
+                  <span>{threadListError}</span>
+                </div>
+              )}
+              {selectedThread && (
+                <div
+                  className={`thread-diagnostic ${selectedThread.issue ? "bad" : "good"}`}
+                  role="status"
+                >
+                  {selectedThread.issue ? (
+                    <AlertTriangle size={14} />
+                  ) : (
+                    <ShieldCheck size={14} />
+                  )}
+                  <div>
+                    <strong>
+                      {selectedThread.issue
+                        ? "发现旧任务兼容问题"
+                        : "任务索引与渠道配置可解析"}
+                    </strong>
+                    <span>
+                      {selectedThread.issue ||
+                        `${selectedThread.providerId} · ${selectedThread.model} · ${formatThreadDate(selectedThread.updatedAtMs)}`}
+                    </span>
+                    <div className="thread-id-line">
+                      <code>{selectedThread.threadId}</code>
+                      <button
+                        className="mini-btn"
+                        aria-label="复制所选任务 ID"
+                        title="复制所选任务 ID"
+                        onClick={() =>
+                          void copyText(selectedThread.threadId, "任务 ID")
+                        }
+                      >
+                        <Copy size={13} />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
             <div className="handoff-input">
-              <label htmlFor="handoff-thread-id">会话 ID</label>
+              <label htmlFor="handoff-thread-id">或手动输入会话 ID</label>
               <div>
                 <input
                   id="handoff-thread-id"
@@ -1236,9 +1391,7 @@ function App() {
                   aria-label="复制新任务 ID"
                   title="复制新任务 ID"
                   onClick={() =>
-                    void navigator.clipboard.writeText(
-                      handoffReport.newThreadId,
-                    )
+                    void copyText(handoffReport.newThreadId, "新任务 ID")
                   }
                 >
                   <Copy size={14} />
@@ -1986,6 +2139,17 @@ function formatBytes(value: number) {
     : value >= 1024
       ? `${Math.round(value / 1024)} KB`
       : `${value} B`;
+}
+
+function formatThreadDate(value: number) {
+  if (!value) return "更新时间未知";
+  return new Date(value).toLocaleString(undefined, {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 export default App;

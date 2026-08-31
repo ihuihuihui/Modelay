@@ -204,6 +204,16 @@ pub fn is_channel_conformant(document: &DocumentMut, channel: &ChannelProfile) -
         && provider.get("experimental_bearer_token").is_none()
 }
 
+pub fn has_provider(document: &DocumentMut, provider_id: &str) -> bool {
+    if provider_id.starts_with("openai") {
+        return true;
+    }
+    document
+        .get("model_providers")
+        .and_then(Item::as_table)
+        .is_some_and(|providers| providers.contains_key(provider_id))
+}
+
 pub fn backup(original: &str) -> Result<PathBuf> {
     let directory = paths::backup_dir()?;
     fs::create_dir_all(&directory)?;

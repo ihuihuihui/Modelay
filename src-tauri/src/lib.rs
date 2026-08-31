@@ -48,6 +48,7 @@ pub fn run() {
             commands::set_widget_mode,
             commands::save_widget_position,
             commands::get_thread_health,
+            commands::list_user_threads,
             commands::create_thread_handoff,
         ])
         .on_window_event(|window, event| {

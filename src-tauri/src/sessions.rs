@@ -1,8 +1,11 @@
 use crate::error::{ModelayError, Result};
+use crate::models::ThreadSummary;
 use crate::paths;
 use chrono::Local;
-use rusqlite::{backup::Backup, named_params, Connection, TransactionBehavior};
-use std::fs;
+use rusqlite::{backup::Backup, named_params, params, Connection, TransactionBehavior};
+use serde_json::Value;
+use std::fs::{self, File};
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -40,6 +43,93 @@ pub struct SessionBackup {
 pub fn detect_official_provider() -> String {
     detect_official_provider_at(&paths::state_db_path().unwrap_or_default())
         .unwrap_or_else(|_| "openai_http".into())
+}
+
+pub fn list_user_threads(limit: usize) -> Result<Vec<ThreadSummary>> {
+    list_user_threads_at(&paths::state_db_path()?, limit)
+}
+
+fn list_user_threads_at(path: &Path, limit: usize) -> Result<Vec<ThreadSummary>> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let connection = Connection::open(path)?;
+    validate_schema(&connection)?;
+    let has_thread_source = has_column(&connection, "threads", "thread_source")?;
+    let title = if has_column(&connection, "threads", "title")? {
+        "COALESCE(NULLIF(title,''), preview, '')"
+    } else {
+        "COALESCE(preview, '')"
+    };
+    let cwd = if has_column(&connection, "threads", "cwd")? {
+        "COALESCE(cwd, '')"
+    } else {
+        "''"
+    };
+    let rollout_path = if has_column(&connection, "threads", "rollout_path")? {
+        "COALESCE(rollout_path, '')"
+    } else {
+        "''"
+    };
+    let ordering = if has_column(&connection, "threads", "updated_at_ms")? {
+        "COALESCE(updated_at_ms, 0)"
+    } else if has_column(&connection, "threads", "updated_at")? {
+        "COALESCE(updated_at * 1000, 0)"
+    } else {
+        "rowid"
+    };
+    let user_filter = if has_thread_source {
+        "COALESCE(thread_source,'user')='user' AND"
+    } else {
+        ""
+    };
+    let sql = format!(
+        "SELECT id, {title}, {cwd}, COALESCE(model_provider,''), COALESCE(model,''), {ordering}, {rollout_path} FROM threads WHERE {user_filter} COALESCE(preview,'')<>'' AND COALESCE(model,'') NOT LIKE '%auto-review%' AND COALESCE(source,'') NOT LIKE '%subagent%' ORDER BY {ordering} DESC LIMIT ?1"
+    );
+    let mut statement = connection.prepare(&sql)?;
+    let rows = statement.query_map(params![limit.clamp(1, 200) as i64], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, String>(3)?,
+            row.get::<_, String>(4)?,
+            row.get::<_, i64>(5)?,
+            row.get::<_, String>(6)?,
+        ))
+    })?;
+    let mut result = Vec::new();
+    for row in rows {
+        let (thread_id, title, cwd, provider_id, model, updated_at_ms, rollout_path) = row?;
+        result.push(ThreadSummary {
+            thread_id,
+            title,
+            cwd,
+            original_provider_id: original_provider_from_rollout(&rollout_path),
+            provider_id,
+            model,
+            updated_at_ms,
+            issue: None,
+        });
+    }
+    Ok(result)
+}
+
+fn original_provider_from_rollout(path: &str) -> Option<String> {
+    let file = File::open(path).ok()?;
+    for line in BufReader::new(file).lines().map_while(std::result::Result::ok).take(20) {
+        let Ok(value) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        if value.get("type").and_then(Value::as_str) != Some("session_meta") {
+            continue;
+        }
+        return value
+            .pointer("/payload/model_provider")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+    }
+    None
 }
 
 fn detect_official_provider_at(path: &Path) -> Result<String> {
@@ -544,5 +634,29 @@ mod tests {
             detect_official_provider_at(&database).unwrap(),
             "openai_http"
         );
+    }
+
+    #[test]
+    fn lists_user_threads_and_detects_provider_rewrites_from_rollout() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = directory.path().join("state.sqlite");
+        let rollout = directory.path().join("session.jsonl");
+        fs::write(
+            &rollout,
+            r#"{"type":"session_meta","payload":{"model_provider":"custom_old"}}
+"#,
+        )
+        .unwrap();
+        let connection = Connection::open(&database).unwrap();
+        connection.execute_batch(&format!(
+            "CREATE TABLE threads(id TEXT PRIMARY KEY, title TEXT, cwd TEXT, model_provider TEXT NOT NULL, model TEXT, preview TEXT NOT NULL, source TEXT NOT NULL, thread_source TEXT, updated_at_ms INTEGER, rollout_path TEXT); INSERT INTO threads VALUES ('user','旧任务','/tmp/project','custom_new','gpt-test','visible','vscode','user',2000,'{}'),('review','review','/tmp','openai_http','codex-auto-review','visible','subagent','subagent',3000,'');",
+            rollout.display()
+        )).unwrap();
+        drop(connection);
+        let items = list_user_threads_at(&database, 20).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].thread_id, "user");
+        assert_eq!(items[0].provider_id, "custom_new");
+        assert_eq!(items[0].original_provider_id.as_deref(), Some("custom_old"));
     }
 }

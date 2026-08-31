@@ -233,6 +233,19 @@ pub struct ThreadHealth {
     pub latest_user_request: Option<String>,
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadSummary {
+    pub thread_id: String,
+    pub title: String,
+    pub cwd: String,
+    pub provider_id: String,
+    pub original_provider_id: Option<String>,
+    pub model: String,
+    pub updated_at_ms: i64,
+    pub issue: Option<String>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HandoffRequest {
