@@ -90,12 +90,12 @@ jobs:
           tagName: v__VERSION__
           releaseName: "Modelay v__VERSION__"
           releaseBody: |
-            官方额度用完后，继续原会话也不必重新开始。
+            跨渠道长会话改用智能续接，减少第三方渠道响应缓慢和卡死。
 
             本次更新内容：
-            - 跨渠道切换后，可在原会话中继续使用目标渠道。
-            - 可选择最近 5 个、全部旧任务或指定会话进行迁移。
-            - 切换前自动备份任务索引，保留恢复路径。
+            - 默认保留原任务，在目标渠道自动创建精简续接任务。
+            - 根据最近一次真实输入 tokens 提示跨渠道延迟风险。
+            - 仍可选择仅切换渠道或直接迁移原会话。
           releaseDraft: false
           prerelease: false
           uploadUpdaterJson: true

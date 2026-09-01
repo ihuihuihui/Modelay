@@ -1,7 +1,21 @@
-export type SessionScope = "recent5" | "all" | "single";
+export type SessionScope = "none" | "recent5" | "all" | "single";
+export type CrossChannelMode = "smart" | "switchOnly" | "migrate";
 
-export function resolveSessionScope(isCurrentChannel: boolean, requested: SessionScope): SessionScope {
-  // A cross-channel switch must migrate the selected tasks so Codex opens
-  // them with the newly activated provider instead of the exhausted one.
-  return requested;
+export function resolveSessionScope(
+  isCurrentChannel: boolean,
+  requested: SessionScope,
+  crossChannelMode: CrossChannelMode,
+): SessionScope {
+  return isCurrentChannel || crossChannelMode === "migrate" ? requested : "none";
+}
+
+export function switchRequiresThread(
+  isCurrentChannel: boolean,
+  requested: SessionScope,
+  crossChannelMode: CrossChannelMode,
+): boolean {
+  return isCurrentChannel
+    ? requested === "single"
+    : crossChannelMode === "smart" ||
+        (crossChannelMode === "migrate" && requested === "single");
 }

@@ -772,7 +772,11 @@ fn switch_inner(request: SwitchRequest) -> Result<SwitchReport> {
         } else {
             checks.push(CheckResult {
                 title: session_scope_label.clone(),
-                detail: "未找到任务索引；新任务仍使用当前渠道".into(),
+                detail: if matches!(session_scope, sessions::RebindScope::None) {
+                    "旧任务保持原渠道绑定；新任务使用当前渠道".into()
+                } else {
+                    "未找到任务索引；新任务仍使用当前渠道".into()
+                },
                 state: CheckState::Warning,
             });
         }
@@ -787,6 +791,7 @@ fn switch_inner(request: SwitchRequest) -> Result<SwitchReport> {
             model: model.into(),
             reasoning_effort: reasoning_effort.into(),
             session_scope: match session_scope {
+                sessions::RebindScope::None => "none",
                 sessions::RebindScope::Recent(_) => "recent5",
                 sessions::RebindScope::All => "all",
                 sessions::RebindScope::Single(_) => "single",
@@ -1038,6 +1043,7 @@ fn ensure_reasoning_supported(
 
 fn parse_session_scope(value: &str, thread_id: Option<&str>) -> Result<sessions::RebindScope> {
     match value {
+        "none" => Ok(sessions::RebindScope::None),
         "recent5" => Ok(sessions::RebindScope::Recent(5)),
         "all" => Ok(sessions::RebindScope::All),
         "single" => {
@@ -1117,6 +1123,10 @@ mod tests {
     #[test]
     fn validates_session_rebind_scope_and_thread_id() {
         assert_eq!(
+            parse_session_scope("none", None).unwrap(),
+            sessions::RebindScope::None
+        );
+        assert_eq!(
             parse_session_scope("recent5", None).unwrap(),
             sessions::RebindScope::Recent(5)
         );
@@ -1135,13 +1145,8 @@ mod tests {
     #[test]
     fn preserves_requested_scope_when_switching_providers() {
         assert_eq!(
-            resolve_session_scope(
-                "openai_http",
-                "custom_proxy",
-                "single",
-                Some("thread-123"),
-            )
-            .unwrap(),
+            resolve_session_scope("openai_http", "custom_proxy", "single", Some("thread-123"),)
+                .unwrap(),
             sessions::RebindScope::Single("thread-123".into())
         );
         assert_eq!(

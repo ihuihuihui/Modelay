@@ -40,7 +40,12 @@ import {
   type UpdatePhase,
 } from "./updateState";
 import { quotaLabel } from "./usageFormatting";
-import { resolveSessionScope, type SessionScope } from "./sessionScope";
+import {
+  resolveSessionScope,
+  switchRequiresThread,
+  type CrossChannelMode,
+  type SessionScope,
+} from "./sessionScope";
 import { currentReleaseInfo } from "./releaseInfo";
 
 type Channel = {
@@ -122,6 +127,7 @@ type ThreadHealth = {
   model: string;
   reasoningEffort: string;
   tokensUsed: number;
+  latestInputTokens: number;
   todayMessageCount: number;
   todayRolloutBytes: number;
   riskLevel: "healthy" | "warning" | "critical";
@@ -184,9 +190,15 @@ const reasoningLabels: Record<string, string> = {
   max: "最大",
 };
 const sessionScopeLabels: Record<SessionScope, string> = {
+  none: "不改写旧任务",
   recent5: "最近活动的 5 个任务",
   all: "覆盖全部旧任务",
   single: "指定一个会话 ID",
+};
+const crossChannelModeLabels: Record<CrossChannelMode, string> = {
+  smart: "智能续接",
+  switchOnly: "仅切换渠道",
+  migrate: "原会话迁移",
 };
 
 function App() {
@@ -195,8 +207,14 @@ function App() {
   const [selectedModel, setSelectedModel] = useState("");
   const [selectedReasoningEffort, setSelectedReasoningEffort] =
     useState("medium");
-  const [sessionScope, setSessionScope] = useState<SessionScope>("all");
+  const [sessionScope, setSessionScope] = useState<SessionScope>("single");
+  const [crossChannelMode, setCrossChannelMode] =
+    useState<CrossChannelMode>("smart");
   const [threadId, setThreadId] = useState("");
+  const [switchThreadHealth, setSwitchThreadHealth] =
+    useState<ThreadHealth | null>(null);
+  const [switchHandoffReport, setSwitchHandoffReport] =
+    useState<HandoffReport | null>(null);
   const [handoffThreadId, setHandoffThreadId] = useState("");
   const [threadOptions, setThreadOptions] = useState<ThreadSummary[]>([]);
   const [threadsLoading, setThreadsLoading] = useState(false);
@@ -453,10 +471,38 @@ function App() {
     return () => window.clearInterval(timer);
   }, [refreshUsage]);
 
+  async function openSwitchConfirmation() {
+    if (!canSwitch) return;
+    setError(null);
+    setSwitchThreadHealth(null);
+    if (requiresSwitchThread) {
+      setBusy(true);
+      setMessage("正在检查所选任务的跨渠道上下文风险…");
+      try {
+        setSwitchThreadHealth(
+          await invoke<ThreadHealth>("get_thread_health", {
+            threadId: threadId.trim(),
+          }),
+        );
+      } catch (reason) {
+        setError(String(reason));
+        setMessage("无法检查所选任务，已停止切换");
+        return;
+      } finally {
+        setBusy(false);
+      }
+    }
+    setSwitchConfirmOpen(true);
+  }
+
   async function switchChannel() {
     if (!selectedModel || modelError) return;
-    const effectiveScope = resolveSessionScope(isCurrent, sessionScope);
-    if (effectiveScope === "single" && !threadId.trim()) {
+    const effectiveScope = resolveSessionScope(
+      isCurrent,
+      sessionScope,
+      crossChannelMode,
+    );
+    if (requiresSwitchThread && !threadId.trim()) {
       setError("请输入需要更新的会话 ID。");
       return;
     }
@@ -465,6 +511,7 @@ function App() {
     setBusy(true);
     setError(null);
     setReport(null);
+    setSwitchHandoffReport(null);
     setMessage("渠道切换进行中：正在备份、写入并验证配置…");
     try {
       const result = await invoke<SwitchReport>("switch_channel", {
@@ -477,10 +524,24 @@ function App() {
         },
       });
       setReport(result);
+      let smartHandoff: HandoffReport | null = null;
+      if (!isCurrent && crossChannelMode === "smart") {
+        setMessage("目标渠道已生效，正在创建精简续接任务…");
+        try {
+          smartHandoff = await invoke<HandoffReport>("create_thread_handoff", {
+            request: { threadId: threadId.trim() },
+          });
+          setSwitchHandoffReport(smartHandoff);
+        } catch (reason) {
+          setError(`渠道已切换，但智能续接失败：${String(reason)}`);
+        }
+      }
       await loadState();
       await refreshUsage();
       setMessage(
-        `渠道配置已完成：${selected.name} / ${selectedModel}，请确认是否立即重启 Codex`,
+        smartHandoff
+          ? `智能续接任务 ${smartHandoff.newThreadId} 已创建，请重启 Codex`
+          : `渠道配置已完成：${selected.name} / ${selectedModel}，请确认是否立即重启 Codex`,
       );
       setSwitchInProgress(false);
       setBusy(false);
@@ -720,14 +781,23 @@ function App() {
   }
 
   const isCurrent = activeId === selectedId;
-  const effectiveSessionScope = resolveSessionScope(isCurrent, sessionScope);
+  const effectiveSessionScope = resolveSessionScope(
+    isCurrent,
+    sessionScope,
+    crossChannelMode,
+  );
+  const requiresSwitchThread = switchRequiresThread(
+    isCurrent,
+    sessionScope,
+    crossChannelMode,
+  );
   const canSwitch =
     !!state &&
     !!selectedModel &&
     !busy &&
     !modelsLoading &&
     !modelError &&
-    (effectiveSessionScope !== "single" || !!threadId.trim()) &&
+    (!requiresSwitchThread || !!threadId.trim()) &&
     (selectedId === "official" ? state.officialLoggedIn : !!selected.hasSecret);
 
   return (
@@ -885,7 +955,7 @@ function App() {
                         disabled={!canSwitch}
                         onClick={(event) => {
                           event.stopPropagation();
-                          setSwitchConfirmOpen(true);
+                          void openSwitchConfirmation();
                         }}
                       >
                         <Wifi size={13} />
@@ -991,35 +1061,60 @@ function App() {
             </div>
             <div className="task-scope-picker">
               <div>
-                <strong>更新旧任务范围</strong>
+                <strong>{isCurrent ? "更新旧任务范围" : "跨渠道任务处理"}</strong>
                 <span>
                   {isCurrent
                     ? "选择需要使用当前 Provider 的旧任务"
-                    : "跨渠道切换后，所选旧任务将使用目标 Provider 继续运行"}
+                    : "智能续接保留旧任务，并为目标渠道创建精简任务"}
                 </span>
               </div>
-              <div className="scope-options">
-                {(["recent5", "all", "single"] as SessionScope[]).map(
-                  (scope) => (
+              {!isCurrent && (
+                <div className="scope-options">
+                  {(["smart", "switchOnly", "migrate"] as CrossChannelMode[]).map(
+                    (mode) => (
+                      <button
+                        className={crossChannelMode === mode ? "active" : ""}
+                        aria-pressed={crossChannelMode === mode}
+                        key={mode}
+                        onClick={() => {
+                          setCrossChannelMode(mode);
+                          setSwitchThreadHealth(null);
+                        }}
+                      >
+                        {crossChannelModeLabels[mode]}
+                      </button>
+                    ),
+                  )}
+                </div>
+              )}
+              {(isCurrent || crossChannelMode === "migrate") && (
+                <div className="scope-options">
+                  {(["recent5", "all", "single"] as SessionScope[]).map((scope) => (
                     <button
                       className={
                         effectiveSessionScope === scope ? "active" : ""
                       }
                       aria-pressed={effectiveSessionScope === scope}
                       key={scope}
-                      onClick={() => setSessionScope(scope)}
+                      onClick={() => {
+                        setSessionScope(scope);
+                        setSwitchThreadHealth(null);
+                      }}
                     >
-                  {sessionScopeLabels[scope]}
+                      {sessionScopeLabels[scope]}
                     </button>
-                  ),
-                )}
-              </div>
-              {sessionScope === "single" && (
+                  ))}
+                </div>
+              )}
+              {requiresSwitchThread && (
                 <label>
-                  <span>会话 ID</span>
+                  <span>{crossChannelMode === "smart" && !isCurrent ? "续接任务" : "会话 ID"}</span>
                   <input
                     value={threadId}
-                    onChange={(event) => setThreadId(event.target.value)}
+                    onChange={(event) => {
+                      setThreadId(event.target.value);
+                      setSwitchThreadHealth(null);
+                    }}
                     placeholder="例如 01a0347b-beff-7c60-ae6b-d6cdf766e863"
                     list="modelay-local-thread-ids"
                     spellCheck={false}
@@ -1035,8 +1130,22 @@ function App() {
               )}
               {!isCurrent && (
                 <small className="compatibility-note">
-                  <ShieldCheck size={12} />
-                  旧任务会同步到目标 Provider、模型和推理强度；切换前会自动备份任务索引
+                  {crossChannelMode === "smart" ? (
+                    <ShieldCheck size={12} />
+                  ) : (
+                    <AlertTriangle size={12} />
+                  )}
+                  {crossChannelMode === "smart"
+                    ? "旧任务保持不变；目标渠道获得精简续接任务"
+                    : crossChannelMode === "switchOnly"
+                      ? "只修改全局渠道，新任务使用目标 Provider"
+                      : "直接迁移会重放历史，长上下文可能显著变慢"}
+                </small>
+              )}
+              {switchThreadHealth && (
+                <small className="compatibility-note">
+                  <Activity size={12} />
+                  最近输入 {formatTokens(switchThreadHealth.latestInputTokens)} · {switchThreadHealth.riskLabel}
                 </small>
               )}
             </div>
@@ -1339,6 +1448,9 @@ function App() {
                   <span>
                     记录体积{" "}
                     <b>{formatBytes(threadHealth.todayRolloutBytes)}</b>
+                  </span>
+                  <span>
+                    最近输入 <b>{formatTokens(threadHealth.latestInputTokens)}</b>
                   </span>
                   <span>
                     {threadHealth.providerId} · {threadHealth.model} ·{" "}
@@ -1840,7 +1952,15 @@ function App() {
                 ? `重新应用 ${selected.name}？`
                 : `启用 ${selected.name}？`}
             </h2>
-            <p>确认后将切换全局 Codex 配置，并更新所选范围内的旧任务。</p>
+            <p>
+              {isCurrent
+                ? "确认后将重新应用全局配置，并更新所选范围内的旧任务。"
+                : crossChannelMode === "smart"
+                  ? "确认后将切换全局配置，并在目标渠道创建精简续接任务。"
+                  : crossChannelMode === "switchOnly"
+                    ? "确认后只切换全局配置，不改写任何旧任务。"
+                    : "确认后将切换全局配置，并直接改写所选旧任务的 Provider。"}
+            </p>
             <div className="switch-summary">
               <div>
                 <span>目标模型</span>
@@ -1854,14 +1974,34 @@ function App() {
                 </strong>
               </div>
               <div>
-                <span>旧任务范围</span>
+                <span>{isCurrent ? "旧任务范围" : "任务处理"}</span>
                 <strong>
-                  {effectiveSessionScope === "single"
-                    ? threadId.trim()
-                    : sessionScopeLabels[effectiveSessionScope]}
+                  {!isCurrent && crossChannelMode !== "migrate"
+                    ? crossChannelModeLabels[crossChannelMode]
+                    : effectiveSessionScope === "single"
+                      ? threadId.trim()
+                      : sessionScopeLabels[effectiveSessionScope]}
                 </strong>
               </div>
             </div>
+            {switchThreadHealth && (
+              <div
+                className={`thread-diagnostic ${switchThreadHealth.riskLevel === "healthy" ? "good" : "bad"}`}
+                role="status"
+              >
+                {switchThreadHealth.riskLevel === "healthy" ? (
+                  <ShieldCheck size={14} />
+                ) : (
+                  <AlertTriangle size={14} />
+                )}
+                <div>
+                  <strong>{switchThreadHealth.riskLabel}</strong>
+                  <span>
+                    最近一轮约 {formatTokens(switchThreadHealth.latestInputTokens)} 输入 tokens
+                  </span>
+                </div>
+              </div>
+            )}
             <div className="modal-actions">
               <button
                 className="ghost-btn"
@@ -1924,9 +2064,31 @@ function App() {
             </div>
             <h2>渠道已成功启用</h2>
             <p>
-              配置、诊断和所选任务更新已经完成。需要重启 ChatGPT/Codex
-              才能让新渠道完整生效；立即重启会中断仍在运行的任务。
+              {switchHandoffReport
+                ? "目标渠道和智能续接任务已经准备完成。重启后可在任务列表中继续。"
+                : "配置、诊断和所选任务更新已经完成。需要重启 ChatGPT/Codex 才能让新渠道完整生效；立即重启会中断仍在运行的任务。"}
             </p>
+            {switchHandoffReport && (
+              <div className="thread-diagnostic good" role="status">
+                <ShieldCheck size={14} />
+                <div>
+                  <strong>智能续接任务已创建</strong>
+                  <div className="thread-id-line">
+                    <code>{switchHandoffReport.newThreadId}</code>
+                    <button
+                      className="mini-btn"
+                      aria-label="复制续接任务 ID"
+                      title="复制续接任务 ID"
+                      onClick={() =>
+                        void copyText(switchHandoffReport.newThreadId, "续接任务 ID")
+                      }
+                    >
+                      <Copy size={13} />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
             <div className="modal-actions">
               <button
                 className="ghost-btn"

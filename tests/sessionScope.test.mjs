@@ -1,14 +1,21 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { resolveSessionScope } from "../src/sessionScope.ts";
+import { resolveSessionScope, switchRequiresThread } from "../src/sessionScope.ts";
 
-test("keeps the requested task scope when switching channels", () => {
-  assert.equal(resolveSessionScope(false, "recent5"), "recent5");
-  assert.equal(resolveSessionScope(false, "single"), "single");
-  assert.equal(resolveSessionScope(false, "all"), "all");
+test("does not rewrite tasks for smart continuation or a plain switch", () => {
+  assert.equal(resolveSessionScope(false, "single", "smart"), "none");
+  assert.equal(resolveSessionScope(false, "all", "switchOnly"), "none");
 });
 
-test("preserves fine-grained scope when reapplying the current channel", () => {
-  assert.equal(resolveSessionScope(true, "recent5"), "recent5");
-  assert.equal(resolveSessionScope(true, "single"), "single");
+test("preserves explicit migration and current-channel scopes", () => {
+  assert.equal(resolveSessionScope(false, "single", "migrate"), "single");
+  assert.equal(resolveSessionScope(false, "all", "migrate"), "all");
+  assert.equal(resolveSessionScope(true, "recent5", "smart"), "recent5");
+});
+
+test("requires a selected task only when the chosen workflow needs one", () => {
+  assert.equal(switchRequiresThread(false, "single", "smart"), true);
+  assert.equal(switchRequiresThread(false, "all", "switchOnly"), false);
+  assert.equal(switchRequiresThread(false, "single", "migrate"), true);
+  assert.equal(switchRequiresThread(false, "all", "migrate"), false);
 });

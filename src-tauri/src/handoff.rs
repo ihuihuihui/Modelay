@@ -11,6 +11,8 @@ use std::path::{Path, PathBuf};
 
 const WARNING_TOKENS: i64 = 1_000_000;
 const CRITICAL_TOKENS: i64 = 5_000_000;
+const MIGRATION_WARNING_INPUT_TOKENS: i64 = 40_000;
+const MIGRATION_CRITICAL_INPUT_TOKENS: i64 = 80_000;
 const MAX_EXCERPT_CHARS: usize = 70_000;
 
 #[derive(Clone, Debug)]
@@ -31,6 +33,7 @@ pub struct TodayContent {
     pub messages: Vec<(String, String)>,
     pub bytes: u64,
     pub referenced_paths: Vec<String>,
+    pub latest_input_tokens: i64,
 }
 
 pub fn inspect(thread_id: &str) -> Result<(ThreadRecord, TodayContent, ThreadHealth)> {
@@ -44,7 +47,19 @@ pub fn inspect(thread_id: &str) -> Result<(ThreadRecord, TodayContent, ThreadHea
         .find(|(role, _)| role == "user")
         .map(|(_, text)| compact(text, 500));
     let mut reasons = Vec::new();
-    let (level, label) = if record.tokens_used >= CRITICAL_TOKENS {
+    let (level, label) = if content.latest_input_tokens >= MIGRATION_CRITICAL_INPUT_TOKENS {
+        reasons.push(format!(
+            "最近一轮输入约 {} tokens，跨渠道直接迁移通常会明显变慢。",
+            content.latest_input_tokens
+        ));
+        ("critical", "建议智能续接")
+    } else if content.latest_input_tokens >= MIGRATION_WARNING_INPUT_TOKENS {
+        reasons.push(format!(
+            "最近一轮输入约 {} tokens，第三方渠道首次恢复可能需要较长时间。",
+            content.latest_input_tokens
+        ));
+        ("warning", "跨渠道迁移有延迟风险")
+    } else if record.tokens_used >= CRITICAL_TOKENS {
         reasons.push("累计处理量已超过 500 万 tokens，恢复、压缩和重试成本很高。".into());
         ("critical", "建议立即续接")
     } else if record.tokens_used >= WARNING_TOKENS {
@@ -70,6 +85,7 @@ pub fn inspect(thread_id: &str) -> Result<(ThreadRecord, TodayContent, ThreadHea
         model: record.model.clone(),
         reasoning_effort: record.effort.clone(),
         tokens_used: record.tokens_used,
+        latest_input_tokens: content.latest_input_tokens,
         today_message_count: content.messages.len(),
         today_rollout_bytes: content.bytes,
         risk_level: level.into(),
@@ -116,6 +132,7 @@ pub fn build_prompt(record: &ThreadRecord, content: &TodayContent) -> String {
 - 旧任务标题：{}
 - 项目工作目录：{}
 - 旧任务累计处理量：{} tokens
+- 最近一轮输入：{} tokens
 
 ## 项目资料与引用路径
 {}
@@ -137,6 +154,7 @@ pub fn build_prompt(record: &ThreadRecord, content: &TodayContent) -> String {
         record.title,
         record.cwd,
         record.tokens_used,
+        content.latest_input_tokens,
         paths,
         numbered(&user_requests),
         numbered(&progress),
@@ -217,6 +235,9 @@ fn read_today_content(record: &ThreadRecord) -> Result<TodayContent> {
             if parsed.with_timezone(&Local).date_naive() != today {
                 continue;
             }
+            if let Some(tokens) = input_tokens(&value) {
+                result.latest_input_tokens = tokens;
+            }
             let Some((role, text)) = message_text(&value) else {
                 continue;
             };
@@ -226,6 +247,17 @@ fn read_today_content(record: &ThreadRecord) -> Result<TodayContent> {
     }
     result.referenced_paths = paths_found.into_iter().take(40).collect();
     Ok(result)
+}
+
+fn input_tokens(value: &Value) -> Option<i64> {
+    if value.get("type").and_then(Value::as_str) != Some("event_msg")
+        || value.pointer("/payload/type").and_then(Value::as_str) != Some("token_count")
+    {
+        return None;
+    }
+    value
+        .pointer("/payload/info/last_token_usage/input_tokens")
+        .and_then(Value::as_i64)
 }
 
 fn rollout_files(record: &ThreadRecord) -> Result<Vec<PathBuf>> {
@@ -375,11 +407,29 @@ mod tests {
             ],
             bytes: 1,
             referenced_paths: vec!["/tmp/project/a.md".into()],
+            latest_input_tokens: 12_345,
         };
         let prompt = build_prompt(&record, &content);
         assert!(prompt.contains("最新需求"));
         assert!(prompt.contains("/tmp/project/a.md"));
+        assert!(prompt.contains("12345 tokens"));
         assert!(prompt.chars().count() < 80_000);
+    }
+
+    #[test]
+    fn extracts_latest_input_tokens_from_token_events() {
+        let value = serde_json::json!({
+            "type": "event_msg",
+            "payload": {
+                "type": "token_count",
+                "info": {"last_token_usage": {"input_tokens": 82_000}}
+            }
+        });
+        assert_eq!(input_tokens(&value), Some(82_000));
+        assert_eq!(
+            input_tokens(&serde_json::json!({"type": "event_msg"})),
+            None
+        );
     }
 
     #[test]

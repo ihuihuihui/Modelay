@@ -183,7 +183,7 @@ pub struct SwitchRequest {
 }
 
 fn default_session_scope() -> String {
-    "all".into()
+    "none".into()
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -225,6 +225,7 @@ pub struct ThreadHealth {
     pub model: String,
     pub reasoning_effort: String,
     pub tokens_used: i64,
+    pub latest_input_tokens: i64,
     pub today_message_count: usize,
     pub today_rollout_bytes: u64,
     pub risk_level: String,
