@@ -90,12 +90,12 @@ jobs:
           tagName: v__VERSION__
           releaseName: "Modelay v__VERSION__"
           releaseBody: |
-            跨渠道长会话改用智能续接，减少第三方渠道响应缓慢和卡死。
+            渠道切换恢复快速迁移，减少旧任务响应缓慢和切换卡顿。
 
             本次更新内容：
-            - 默认保留原任务，在目标渠道自动创建精简续接任务。
-            - 根据最近一次真实输入 tokens 提示跨渠道延迟风险。
-            - 仍可选择仅切换渠道或直接迁移原会话。
+            - 默认只更新配置和选定任务绑定，并立即重启 Codex。
+            - 切换主流程跳过模型、余额、Doctor 和任务全量检查。
+            - 智能续接仍可选，128000 tokens 上下文配置下更早触发压缩。
           releaseDraft: false
           prerelease: false
           uploadUpdaterJson: true

@@ -209,7 +209,7 @@ function App() {
     useState("medium");
   const [sessionScope, setSessionScope] = useState<SessionScope>("single");
   const [crossChannelMode, setCrossChannelMode] =
-    useState<CrossChannelMode>("smart");
+    useState<CrossChannelMode>("migrate");
   const [threadId, setThreadId] = useState("");
   const [switchThreadHealth, setSwitchThreadHealth] =
     useState<ThreadHealth | null>(null);
@@ -521,6 +521,7 @@ function App() {
           reasoningEffort: selectedReasoningEffort,
           sessionScope: effectiveScope,
           threadId: effectiveScope === "single" ? threadId.trim() : null,
+          fastSwitch: true,
         },
       });
       setReport(result);
@@ -536,16 +537,22 @@ function App() {
           setError(`渠道已切换，但智能续接失败：${String(reason)}`);
         }
       }
-      await loadState();
-      await refreshUsage();
       setMessage(
         smartHandoff
-          ? `智能续接任务 ${smartHandoff.newThreadId} 已创建，请重启 Codex`
-          : `渠道配置已完成：${selected.name} / ${selectedModel}，请确认是否立即重启 Codex`,
+          ? `智能续接任务 ${smartHandoff.newThreadId} 已创建，正在重启 Codex`
+          : `渠道已切换到 ${selected.name}，正在重启 Codex`,
       );
       setSwitchInProgress(false);
       setBusy(false);
-      setRestartOpen(result.needsRestart);
+      try {
+        await invoke("restart_chatgpt");
+        setMessage("Codex 已重新打开，渠道切换完成");
+      } catch (reason) {
+        setError(`渠道已切换，但自动重启失败：${String(reason)}`);
+        setRestartOpen(result.needsRestart);
+      }
+      await loadState();
+      await refreshUsage();
     } catch (reason) {
       setError(String(reason));
       setMessage("切换失败，已尝试恢复原配置");
@@ -760,6 +767,26 @@ function App() {
       setHandoffError(detail);
       setError(detail);
       setMessage("续接任务创建失败，旧任务未受影响");
+    } finally {
+      setHandoffBusy(false);
+    }
+  }
+
+  async function compactThread() {
+    if (!threadHealth || handoffBusy) return;
+    setHandoffBusy(true);
+    setHandoffError(null);
+    setError(null);
+    setMessage("正在压缩原任务上下文，请稍候…");
+    try {
+      await invoke("compact_thread", { threadId: threadHealth.threadId });
+      await inspectThread();
+      setMessage("原任务上下文压缩完成，可以继续使用");
+    } catch (reason) {
+      const detail = String(reason);
+      setHandoffError(detail);
+      setError(detail);
+      setMessage("原任务压缩失败，旧任务未被删除");
     } finally {
       setHandoffBusy(false);
     }
@@ -1469,18 +1496,28 @@ function App() {
                     <p>{threadHealth.latestUserRequest}</p>
                   </div>
                 )}
-                <button
-                  className="primary-btn handoff-action"
-                  onClick={() => void createHandoff()}
-                  disabled={handoffBusy}
-                >
-                  {handoffBusy ? (
-                    <RefreshCw size={15} className="spin" />
-                  ) : (
-                    <ArrowRight size={15} />
-                  )}
-                  整理并创建续接任务
-                </button>
+                <div className="handoff-actions">
+                  <button
+                    className="ghost-btn"
+                    onClick={() => void compactThread()}
+                    disabled={handoffBusy}
+                  >
+                    {handoffBusy ? <RefreshCw size={15} className="spin" /> : <RefreshCw size={15} />}
+                    压缩原任务
+                  </button>
+                  <button
+                    className="primary-btn handoff-action"
+                    onClick={() => void createHandoff()}
+                    disabled={handoffBusy}
+                  >
+                    {handoffBusy ? (
+                      <RefreshCw size={15} className="spin" />
+                    ) : (
+                      <ArrowRight size={15} />
+                    )}
+                    整理并创建续接任务
+                  </button>
+                </div>
               </div>
             )}
             {handoffReport && (

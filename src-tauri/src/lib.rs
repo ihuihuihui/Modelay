@@ -50,6 +50,7 @@ pub fn run() {
             commands::get_thread_health,
             commands::list_user_threads,
             commands::create_thread_handoff,
+            commands::compact_thread,
         ])
         .on_window_event(|window, event| {
             if window.label() == "main" {

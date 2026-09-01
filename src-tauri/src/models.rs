@@ -180,10 +180,16 @@ pub struct SwitchRequest {
     pub session_scope: String,
     #[serde(default)]
     pub thread_id: Option<String>,
+    #[serde(default = "default_fast_switch")]
+    pub fast_switch: bool,
 }
 
 fn default_session_scope() -> String {
     "none".into()
+}
+
+fn default_fast_switch() -> bool {
+    true
 }
 
 #[derive(Clone, Debug, Serialize)]

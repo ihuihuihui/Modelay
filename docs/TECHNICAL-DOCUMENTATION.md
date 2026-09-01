@@ -59,7 +59,7 @@ supports_websockets = false
 
 只匹配 `openai*`、`custom` 和 `custom_*`。当前数据库要求 `thread_source='user'`，并排除空预览、`codex-auto-review` 和 subagent。旧数据库缺少 `thread_source` 时使用可见任务规则；旧表缺少 `reasoning_effort` 时仍完成 Provider 与模型覆盖。Ollama 等其他 Provider、rollout 和消息历史不修改。
 
-跨渠道切换默认采用智能续接：旧任务保持原 Provider 绑定，切换目标渠道后从指定任务提取精简交接内容并创建新任务，避免目标 Provider 重新处理完整长上下文。用户也可仅切换渠道，或显式选择最近 5 个、全部、指定用户任务范围，把旧任务的 Provider、模型和推理强度改为目标配置；直接迁移前会生成 SQLite 备份。
+跨渠道切换默认采用快速迁移：只写入目标配置、更新选定任务的 Provider/模型/推理强度并立即重启 Codex，不执行模型列表、余额、Doctor 或任务索引全量检查。智能续接和仅切换渠道仍可选；快速迁移只有在用户选择指定任务或范围时才改写对应索引，直接迁移前会生成 SQLite 备份。
 
 ## 模型、额度与胶囊
 
@@ -81,7 +81,7 @@ Codex 子进程的 stdout/stderr 会在独立线程持续读取，避免输出�
 
 ## 会话健康与自动续接
 
-用户选择会话后，Modelay 从 Codex 任务索引读取累计 tokens、工作目录、模型、更新时间和 rollout 路径，并只解析该任务最后活动日的用户与助手消息。rollout 中最近一次 `token_count` 事件的输入达到 4 万 tokens 时进入警告级别，达到 8 万时进入严重级别并建议智能续接；累计 tokens、单日 rollout 体积和消息数量作为辅助风险指标。
+智能续接或手动健康检查时，Modelay 从 Codex 任务索引读取累计 tokens、工作目录、模型、更新时间和 rollout 路径，并只解析该任务最后活动日的用户与助手消息。rollout 中最近一次 `token_count` 事件的输入达到 4 万 tokens 时进入警告级别，达到 8 万时进入严重级别并建议智能续接；累计 tokens、单日 rollout 体积和消息数量作为辅助风险指标。快速切换默认不读取 rollout，避免切换流程被长任务阻塞。
 
 创建续接任务时，Modelay 提取最后活动日的用户需求、助手进度以及消息中引用的绝对路径，生成长度受限的结构化交接 Prompt，再调用 Codex app-server 的 `thread/start` 和 `turn/start`。模型与 Provider 只在线程创建时设置，首轮沿用线程配置，避免第三方渠道重复解析模型覆盖参数。Codex 接受并持久化用户交接消息后，Modelay 尽力调用 `turn/interrupt` 停止空转并关闭自己的 app-server；轮次若已经提前停止，interrupt 错误不会把已经创建成功的续接任务误报为失败。`turn/start` 真正失败时会归档刚创建的空任务，并在续接区域显示脱敏后的具体原因与恢复建议。新任务不复制旧任务的完整消息历史、rollout 或数据库记录；旧任务不会被修改、删除或覆盖。任务索引兼容存在或缺少 `thread_source`、`updated_at_ms` 的数据库结构。
 

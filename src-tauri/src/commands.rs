@@ -78,6 +78,11 @@ pub async fn create_thread_handoff(
     run_blocking(move || create_thread_handoff_inner(request)).await
 }
 
+#[tauri::command]
+pub async fn compact_thread(thread_id: String) -> std::result::Result<(), String> {
+    run_blocking(move || codex::compact_thread(thread_id.trim())).await
+}
+
 fn create_thread_handoff_inner(request: HandoffRequest) -> Result<HandoffReport> {
     let _guard = lock_mutations()?;
     let (record, content, health) = handoff::inspect(request.thread_id.trim())?;
@@ -594,7 +599,7 @@ fn switch_inner(request: SwitchRequest) -> Result<SwitchReport> {
         })?),
         None => None,
     };
-    if is_official {
+    if is_official && !request.fast_switch {
         if !codex::login_status() {
             return Err("当前不是 ChatGPT 官方账号登录，请先完成官方登录。".into());
         }
@@ -606,15 +611,17 @@ fn switch_inner(request: SwitchRequest) -> Result<SwitchReport> {
         )?;
         ensure_reasoning_supported(&available, model, reasoning_effort, "官方账号")?;
     }
-    if let (Some(channel), Some(secret)) = (&channel, &secret) {
-        if channel.validates_model_list {
-            let supported = usage::list_channel_models(channel, secret)?;
-            ensure_model_supported(
-                supported.iter().map(|item| item.id.as_str()),
-                model,
-                &channel.name,
-            )?;
-            ensure_reasoning_supported(&supported, model, reasoning_effort, &channel.name)?;
+    if !request.fast_switch {
+        if let (Some(channel), Some(secret)) = (&channel, &secret) {
+            if channel.validates_model_list {
+                let supported = usage::list_channel_models(channel, secret)?;
+                ensure_model_supported(
+                    supported.iter().map(|item| item.id.as_str()),
+                    model,
+                    &channel.name,
+                )?;
+                ensure_reasoning_supported(&supported, model, reasoning_effort, &channel.name)?;
+            }
         }
     }
     let mut config_document = config::read()?;
@@ -633,7 +640,12 @@ fn switch_inner(request: SwitchRequest) -> Result<SwitchReport> {
         .collect::<Result<Vec<_>>>()?;
     let previous_image_environment = platform::get_user_environment(IMAGE_ENVIRONMENT_KEY)?;
     let previous_skill_file = storage::snapshot_image_skill()?;
-    let session_backup = sessions::backup()?;
+    let session_backup =
+        if request.fast_switch || matches!(session_scope, sessions::RebindScope::None) {
+            None
+        } else {
+            sessions::backup()?
+        };
     let image_skill = if is_official { "imagegen" } else { "imagegen2" };
     codex::reset_rpc();
     usage::clear_cache();
@@ -683,32 +695,41 @@ fn switch_inner(request: SwitchRequest) -> Result<SwitchReport> {
             ),
             state: CheckState::Passed,
         });
-        let doctor_values = environment_keys
-            .iter()
-            .map(|key| {
-                let value = preferences
-                    .channels
-                    .iter()
-                    .find(|item| item.environment_key() == *key)
-                    .and_then(|item| secrets::get(item).ok().flatten())
-                    .or_else(|| {
-                        (environment_key.as_deref() == Some(key.as_str()))
-                            .then(|| secret.clone())
-                            .flatten()
-                    });
-                (key.clone(), value)
-            })
-            .collect::<Vec<_>>();
-        let doctor_environment = doctor_values
-            .iter()
-            .map(|(key, value)| (key.as_str(), value.as_deref()))
-            .collect::<Vec<_>>();
-        let doctor_detail = codex::doctor(&doctor_environment)?;
-        checks.push(CheckResult {
-            title: "Codex Doctor".into(),
-            detail: doctor_detail,
-            state: CheckState::Passed,
-        });
+        if request.fast_switch {
+            checks.push(CheckResult {
+                title: "快速切换".into(),
+                detail: "已跳过切换前模型、网络和任务索引检查；配置写入后立即重启 Codex".into(),
+                state: CheckState::Passed,
+            });
+        }
+        if !request.fast_switch {
+            let doctor_values = environment_keys
+                .iter()
+                .map(|key| {
+                    let value = preferences
+                        .channels
+                        .iter()
+                        .find(|item| item.environment_key() == *key)
+                        .and_then(|item| secrets::get(item).ok().flatten())
+                        .or_else(|| {
+                            (environment_key.as_deref() == Some(key.as_str()))
+                                .then(|| secret.clone())
+                                .flatten()
+                        });
+                    (key.clone(), value)
+                })
+                .collect::<Vec<_>>();
+            let doctor_environment = doctor_values
+                .iter()
+                .map(|(key, value)| (key.as_str(), value.as_deref()))
+                .collect::<Vec<_>>();
+            let doctor_detail = codex::doctor(&doctor_environment)?;
+            checks.push(CheckResult {
+                title: "Codex Doctor".into(),
+                detail: doctor_detail,
+                state: CheckState::Passed,
+            });
+        }
         if is_official {
             checks.push(CheckResult {
                 title: "官方登录与模型".into(),
@@ -722,7 +743,7 @@ fn switch_inner(request: SwitchRequest) -> Result<SwitchReport> {
                 detail: "已清除所有非目标第三方渠道的启动环境变量".into(),
                 state: CheckState::Passed,
             });
-        } else {
+        } else if !request.fast_switch {
             let status =
                 usage::endpoint_status(channel.as_ref().unwrap(), secret.as_ref().unwrap())?;
             checks.push(CheckResult {

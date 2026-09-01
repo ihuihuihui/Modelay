@@ -6,9 +6,9 @@ use std::fs;
 use std::path::PathBuf;
 use toml_edit::{value, DocumentMut, Item, Table};
 
-pub const DEFAULT_MODEL_CONTEXT_WINDOW: i64 = 400_000;
-pub const DEFAULT_AUTO_COMPACT_TOKEN_LIMIT: i64 = 260_000;
-pub const MAX_AUTO_COMPACT_TOKEN_LIMIT_EXCLUSIVE: i64 = 272_000;
+pub const DEFAULT_MODEL_CONTEXT_WINDOW: i64 = 128_000;
+pub const DEFAULT_AUTO_COMPACT_TOKEN_LIMIT: i64 = 100_000;
+pub const MAX_AUTO_COMPACT_TOKEN_LIMIT_EXCLUSIVE: i64 = 128_000;
 
 pub struct ConfigDocument {
     pub existed: bool,
@@ -128,18 +128,18 @@ pub fn activate_channel(
     Ok(())
 }
 
-/// Apply safe defaults without overriding an intentional, valid custom
-/// context window or a lower auto-compaction threshold.
+/// Keep the effective context close to Codex's 128k compatibility profile so
+/// old tasks do not grow into multi-minute requests before compaction.
 pub fn ensure_context_management(document: &mut DocumentMut) {
     let context_window = document
         .get("model_context_window")
         .and_then(Item::as_integer)
-        .filter(|value| *value > 1)
+        .filter(|value| *value > 1 && *value <= DEFAULT_MODEL_CONTEXT_WINDOW)
         .unwrap_or(DEFAULT_MODEL_CONTEXT_WINDOW);
     if document
         .get("model_context_window")
         .and_then(Item::as_integer)
-        .is_none_or(|value| value <= 1)
+        .is_none_or(|value| value <= 1 || value > DEFAULT_MODEL_CONTEXT_WINDOW)
     {
         document["model_context_window"] = value(context_window);
     }
@@ -160,7 +160,7 @@ pub fn has_safe_context_management(document: &DocumentMut) -> bool {
     let Some(context_window) = document
         .get("model_context_window")
         .and_then(Item::as_integer)
-        .filter(|value| *value > 1)
+        .filter(|value| *value > 1 && *value <= DEFAULT_MODEL_CONTEXT_WINDOW)
     else {
         return false;
     };
@@ -301,19 +301,19 @@ model_auto_compact_token_limit = 272000
         );
 
         let mut custom_document = r#"
-model_context_window = 300000
-model_auto_compact_token_limit = 180000
+model_context_window = 128000
+model_auto_compact_token_limit = 90000
 "#
         .parse::<DocumentMut>()
         .unwrap();
         ensure_context_management(&mut custom_document);
         assert_eq!(
             custom_document["model_context_window"].as_integer(),
-            Some(300_000)
+            Some(128_000)
         );
         assert_eq!(
             custom_document["model_auto_compact_token_limit"].as_integer(),
-            Some(180_000)
+            Some(90_000)
         );
     }
 }

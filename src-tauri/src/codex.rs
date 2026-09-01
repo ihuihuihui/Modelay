@@ -450,6 +450,18 @@ pub fn create_handoff_thread(
     Ok(thread_id)
 }
 
+pub fn compact_thread(thread_id: &str) -> Result<()> {
+    if thread_id.trim().is_empty() {
+        return Err(ModelayError::Message("会话 ID 不能为空。".into()));
+    }
+    rpc(
+        "thread/compact/start",
+        json!({"threadId": thread_id.trim()}),
+        Duration::from_secs(600),
+    )?;
+    Ok(())
+}
+
 fn handoff_turn_params(thread_id: &str, prompt: String) -> Value {
     json!({
         "threadId": thread_id,
