@@ -187,7 +187,6 @@ const sessionScopeLabels: Record<SessionScope, string> = {
   recent5: "最近活动的 5 个任务",
   all: "覆盖全部旧任务",
   single: "指定一个会话 ID",
-  none: "保留原渠道会话",
 };
 
 function App() {
@@ -995,8 +994,8 @@ function App() {
                 <strong>更新旧任务范围</strong>
                 <span>
                   {isCurrent
-                    ? "重新应用当前渠道时可精细选择"
-                    : "跨渠道切换默认保留原渠道会话，不再让旧会话从列表消失"}
+                    ? "选择需要使用当前 Provider 的旧任务"
+                    : "跨渠道切换后，所选旧任务将使用目标 Provider 继续运行"}
                 </span>
               </div>
               <div className="scope-options">
@@ -1007,7 +1006,6 @@ function App() {
                         effectiveSessionScope === scope ? "active" : ""
                       }
                       aria-pressed={effectiveSessionScope === scope}
-                      disabled={!isCurrent}
                       key={scope}
                       onClick={() => setSessionScope(scope)}
                     >
@@ -1016,7 +1014,7 @@ function App() {
                   ),
                 )}
               </div>
-              {isCurrent && sessionScope === "single" && (
+              {sessionScope === "single" && (
                 <label>
                   <span>会话 ID</span>
                   <input
@@ -1038,7 +1036,7 @@ function App() {
               {!isCurrent && (
                 <small className="compatibility-note">
                   <ShieldCheck size={12} />
-                  所有可互通用户会话都会同步到目标 Provider、模型和推理强度
+                  旧任务会同步到目标 Provider、模型和推理强度；切换前会自动备份任务索引
                 </small>
               )}
             </div>

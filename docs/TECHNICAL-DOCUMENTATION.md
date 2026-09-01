@@ -59,7 +59,7 @@ supports_websockets = false
 
 只匹配 `openai*`、`custom` 和 `custom_*`。当前数据库要求 `thread_source='user'`，并排除空预览、`codex-auto-review` 和 subagent。旧数据库缺少 `thread_source` 时使用可见任务规则；旧表缺少 `reasoning_effort` 时仍完成 Provider 与模型覆盖。Ollama 等其他 Provider、rollout 和消息历史不修改。
 
-跨渠道切换时界面强制使用全部用户任务范围，确保旧任务不会继续引用当前配置中不存在的 `openai_http` 或旧自定义 Provider；最近 5 个与指定会话范围只在重新应用当前渠道时开放。数据库更新只是索引字段事务，不会把未打开任务的上下文载入模型，也不会拖慢后续会话响应。
+跨渠道切换时也可选择最近 5 个、全部或指定用户任务范围，把旧任务的 Provider、模型和推理强度改为目标配置，使额度耗尽的原会话可以继续运行；切换前会生成 SQLite 备份。数据库更新只是索引字段事务，不会把未打开任务的上下文载入模型，也不会拖慢后续会话响应。
 
 ## 模型、额度与胶囊
 

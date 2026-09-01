@@ -772,11 +772,7 @@ fn switch_inner(request: SwitchRequest) -> Result<SwitchReport> {
         } else {
             checks.push(CheckResult {
                 title: session_scope_label.clone(),
-                detail: if matches!(session_scope, sessions::RebindScope::None) {
-                    "跨渠道切换不会改写旧任务；原渠道会话仍保留，新任务使用当前渠道".into()
-                } else {
-                    "未找到任务索引；新任务仍使用当前渠道".into()
-                },
+                detail: "未找到任务索引；新任务仍使用当前渠道".into(),
                 state: CheckState::Warning,
             });
         }
@@ -791,7 +787,6 @@ fn switch_inner(request: SwitchRequest) -> Result<SwitchReport> {
             model: model.into(),
             reasoning_effort: reasoning_effort.into(),
             session_scope: match session_scope {
-                sessions::RebindScope::None => "none",
                 sessions::RebindScope::Recent(_) => "recent5",
                 sessions::RebindScope::All => "all",
                 sessions::RebindScope::Single(_) => "single",
@@ -1064,16 +1059,15 @@ fn parse_session_scope(value: &str, thread_id: Option<&str>) -> Result<sessions:
 }
 
 fn resolve_session_scope(
-    current_provider: &str,
-    target_provider: &str,
+    _current_provider: &str,
+    _target_provider: &str,
     requested: &str,
     thread_id: Option<&str>,
 ) -> Result<sessions::RebindScope> {
-    if current_provider != target_provider {
-        // Keep conversations attached to their original provider. Rewriting
-        // every thread made the previous channel disappear from Codex's list.
-        return Ok(sessions::RebindScope::None);
-    }
+    // Existing tasks are intentionally migrated across providers. This lets
+    // a user continue the same Codex conversation after its old channel is
+    // exhausted; the SQLite backup created by switch_inner remains available
+    // if the user needs to restore the previous bindings.
     parse_session_scope(requested, thread_id)
 }
 
@@ -1139,10 +1133,16 @@ mod tests {
     }
 
     #[test]
-    fn forces_all_tasks_when_switching_providers() {
+    fn preserves_requested_scope_when_switching_providers() {
         assert_eq!(
-            resolve_session_scope("openai_http", "custom_proxy", "single", None).unwrap(),
-            sessions::RebindScope::None
+            resolve_session_scope(
+                "openai_http",
+                "custom_proxy",
+                "single",
+                Some("thread-123"),
+            )
+            .unwrap(),
+            sessions::RebindScope::Single("thread-123".into())
         );
         assert_eq!(
             resolve_session_scope("custom_proxy", "custom_proxy", "recent5", None).unwrap(),
