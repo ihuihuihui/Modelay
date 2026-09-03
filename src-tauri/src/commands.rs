@@ -557,6 +557,15 @@ pub async fn switch_channel(request: SwitchRequest) -> std::result::Result<Switc
     run_blocking(move || switch_inner(request)).await
 }
 
+fn should_backup_session_index(
+    _fast_switch: bool,
+    scope: &sessions::RebindScope,
+) -> bool {
+    // Fast switching only skips the expensive external checks. A requested
+    // session migration still needs the database backup and rebind steps.
+    !matches!(scope, sessions::RebindScope::None)
+}
+
 fn switch_inner(request: SwitchRequest) -> Result<SwitchReport> {
     let _guard = lock_mutations()?;
     let mut preferences = storage::load_preferences()?;
@@ -640,12 +649,11 @@ fn switch_inner(request: SwitchRequest) -> Result<SwitchReport> {
         .collect::<Result<Vec<_>>>()?;
     let previous_image_environment = platform::get_user_environment(IMAGE_ENVIRONMENT_KEY)?;
     let previous_skill_file = storage::snapshot_image_skill()?;
-    let session_backup =
-        if request.fast_switch || matches!(session_scope, sessions::RebindScope::None) {
-            None
-        } else {
-            sessions::backup()?
-        };
+    let session_backup = if should_backup_session_index(request.fast_switch, &session_scope) {
+        sessions::backup()?
+    } else {
+        None
+    };
     let image_skill = if is_official { "imagegen" } else { "imagegen2" };
     codex::reset_rpc();
     usage::clear_cache();
@@ -1139,6 +1147,26 @@ mod tests {
             supported_reasoning_efforts: Vec::new(),
         }];
         assert!(ensure_reasoning_supported(&models, "proxy-model", "high", "Proxy").is_ok());
+    }
+
+    #[test]
+    fn fast_switch_keeps_requested_session_rebind_enabled() {
+        assert!(should_backup_session_index(
+            true,
+            &sessions::RebindScope::Single("thread-123".into())
+        ));
+        assert!(should_backup_session_index(
+            true,
+            &sessions::RebindScope::All
+        ));
+        assert!(should_backup_session_index(
+            false,
+            &sessions::RebindScope::Recent(5)
+        ));
+        assert!(!should_backup_session_index(
+            true,
+            &sessions::RebindScope::None
+        ));
     }
 
     #[test]
